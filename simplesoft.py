@@ -3,7 +3,7 @@ import os
 
 # 파일 경로
 path_a = "/data/ephemeral/home/Seung/output/LightGCN/LightGCN_200epochs/submission.csv"
-path_b = "/data/ephemeral/home/Seung/output/MultVAE/novalid multvae/submission.csv"
+path_b = "/data/ephemeral/home/Seung/output/MultVAE/novalid epoch 200/submission.csv"
 
 # 로드
 a = pd.read_csv(path_a)
@@ -18,9 +18,6 @@ a["item"] = a["item"].astype(int)
 b["user"] = b["user"].astype(int)
 b["item"] = b["item"].astype(int)
 
-# user 기준 정렬 (rank 안정화)
-a = a.sort_values(["user"])
-b = b.sort_values(["user"])
 
 # rank 부여
 a["rank"] = a.groupby("user").cumcount() + 1
@@ -42,7 +39,7 @@ df = pd.merge(
 print("Merged shape:", df.shape)
 
 # soft voting
-w1, w2 = 0.3, 0.7
+w1, w2 = 0.5, 0.5
 df["final_score"] = w1 * df["score_a"] + w2 * df["score_b"]
 
 # user별 top10
