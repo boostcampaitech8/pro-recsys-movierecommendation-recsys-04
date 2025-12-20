@@ -1,4 +1,5 @@
 import os
+import logging
 import random
 import numpy as np
 import pandas as pd
@@ -6,6 +7,8 @@ import lightning as L
 import torch
 from scipy import sparse
 from torch.utils.data import DataLoader, TensorDataset
+
+log = logging.getLogger(__name__)
 
 
 class RecSysDataModule(L.LightningDataModule):
@@ -18,6 +21,14 @@ class RecSysDataModule(L.LightningDataModule):
             batch_size: 512
             valid_ratio: 0.1
             min_interactions: 5
+            split_strategy: "random"  # "random", "leave_one_out", "temporal_user", "temporal_global"
+            temporal_split_ratio: 0.8  # temporal split용 (0.8 = 80% train, 20% valid)
+
+    Split Strategies:
+        - random: 각 유저별로 랜덤하게 valid_ratio 비율만큼 분할
+        - leave_one_out: 각 유저별로 랜덤하게 1개의 아이템만 validation
+        - temporal_user: 각 유저별로 시간순 정렬 후 temporal_split_ratio 기준 분할 (time 컬럼 필요)
+        - temporal_global: 전체 데이터를 시간순 정렬 후 temporal_split_ratio 기준 분할 (time 컬럼 필요)
     """
 
     def __init__(
@@ -27,6 +38,9 @@ class RecSysDataModule(L.LightningDataModule):
         valid_ratio: float = 0.1,
         min_interactions: int = 5,
         seed: int = 42,
+        data_file="train_ratings.csv",
+        split_strategy: str = "random",
+        temporal_split_ratio: float = 0.8,
     ):
         super().__init__()
         self.data_dir = os.path.expanduser(data_dir)
@@ -34,6 +48,9 @@ class RecSysDataModule(L.LightningDataModule):
         self.valid_ratio = valid_ratio
         self.min_interactions = min_interactions
         self.seed = seed
+        self.data_file = data_file
+        self.split_strategy = split_strategy
+        self.temporal_split_ratio = temporal_split_ratio
 
         # 인코딩 매핑 (setup 후 사용 가능)
         self.user2idx = None  # user_id -> user_idx
@@ -54,25 +71,58 @@ class RecSysDataModule(L.LightningDataModule):
 
     def setup(self, stage: str = None):
         """데이터 로드 및 분할"""
-        # 1. 상호작용 데이터 읽기
-        df = self._read_interactions()
+        log.info("=" * 60)
+        log.info("Setting up RecSys DataModule...")
 
-        # 2. ID 인코딩 (user_id, item_id -> 연속적인 인덱스)
-        df_enc = self._encode_ids(df)
-
-        # 3. Train/Valid 분할 (랜덤 마스킹)
-        if self.valid_ratio > 0:
-            train_df, self.valid_gt = self._train_valid_split(df_enc)
+        if self.num_users:  # 이미 초기화 되어 있으면 skip
+            log.info("Skip as RecSysDataModule is already initialized")
         else:
-            train_df = df_enc
-            self.valid_gt = {u: [] for u in range(self.num_users)}
+            # 1. 상호작용 데이터 읽기
+            log.info("Step 1/4: Reading interaction data...")
+            df = self._read_interactions()
+            log.info(f"  - Loaded {len(df):,} interactions")
 
-        # 4. Sparse Matrix 생성 (CSR 형식)
-        self.train_mat = self._build_user_item_matrix(train_df)
+            # 2. ID 인코딩 (user_id, item_id -> 연속적인 인덱스)
+            log.info("Step 2/4: Encoding user/item IDs...")
+            df_enc = self._encode_ids(df)
+            log.info(f"  - Users: {self.num_users:,}, Items: {self.num_items:,}")
+
+            # 3. Train/Valid 분할
+            log.info(f"Step 3/4: Splitting train/validation data (strategy: {self.split_strategy})...")
+            temporal_strategies = ["temporal_user", "temporal_global"]
+            if self.valid_ratio > 0 or self.split_strategy in ["leave_one_out"] + temporal_strategies:
+                if self.split_strategy == "random":
+                    train_df, self.valid_gt = self._train_valid_split_random(df_enc)
+                elif self.split_strategy == "leave_one_out":
+                    train_df, self.valid_gt = self._train_valid_split_leave_one_out(df_enc)
+                elif self.split_strategy == "temporal_user":
+                    train_df, self.valid_gt = self._train_valid_split_temporal_user(df_enc, df)
+                elif self.split_strategy == "temporal_global":
+                    train_df, self.valid_gt = self._train_valid_split_temporal_global(df_enc, df)
+                else:
+                    raise ValueError(f"Unknown split_strategy: {self.split_strategy}")
+
+                n_valid = sum(len(items) for items in self.valid_gt.values())
+                log.info(f"  - Train: {len(train_df):,} interactions")
+                log.info(f"  - Valid: {n_valid:,} interactions")
+            else:
+                train_df = df_enc
+                self.valid_gt = {u: [] for u in range(self.num_users)}
+                log.info(f"  - Train: {len(train_df):,} interactions (no validation)")
+
+            # 4. Sparse Matrix 생성 (CSR 형식)
+            log.info("Step 4/4: Building sparse user-item matrix...")
+            self.train_mat = self._build_user_item_matrix(train_df)
+            log.info(f"  - Matrix shape: {self.train_mat.shape}")
+            log.info(
+                f"  - Sparsity: {100 * (1 - self.train_mat.nnz / (self.num_users * self.num_items)):.2f}%"
+            )
+        log.info("DataModule setup complete!")
+        log.info("=" * 60)
 
     def _read_interactions(self):
         """train_ratings.csv 읽기 및 필터링"""
-        file_path = os.path.join(self.data_dir, "train_ratings.csv")
+        file_path = os.path.join(self.data_dir, self.data_file)
         df = pd.read_csv(file_path)
 
         # 최소 상호작용 수 필터링
@@ -102,7 +152,7 @@ class RecSysDataModule(L.LightningDataModule):
 
         return df_enc
 
-    def _train_valid_split(self, df_enc):
+    def _train_valid_split_random(self, df_enc):
         """각 유저별로 랜덤하게 valid_ratio 비율만큼 validation set으로 분할"""
         random.seed(self.seed)
         np.random.seed(self.seed)
@@ -132,6 +182,101 @@ class RecSysDataModule(L.LightningDataModule):
                 train_rows.append({"user": u_idx, "item": it})
 
         train_df = pd.DataFrame(train_rows)
+        return train_df, valid_gt
+
+    def _train_valid_split_leave_one_out(self, df_enc):
+        """각 유저별로 마지막 1개를 validation set으로 분할 (Leave-One-Out)"""
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+
+        train_rows = []
+        valid_gt = {u: [] for u in range(self.num_users)}
+
+        for u_idx in range(self.num_users):
+            user_items = df_enc[df_enc["user"] == u_idx]["item"].tolist()
+            n_items = len(user_items)
+
+            if n_items == 0:
+                continue
+
+            # 랜덤하게 1개를 validation으로 선택
+            valid_item = random.choice(user_items)
+            train_items = [it for it in user_items if it != valid_item]
+
+            # validation ground truth 저장
+            valid_gt[u_idx] = [valid_item]
+
+            # train 데이터 저장
+            for it in train_items:
+                train_rows.append({"user": u_idx, "item": it})
+
+        train_df = pd.DataFrame(train_rows)
+        return train_df, valid_gt
+
+    def _train_valid_split_temporal_user(self, df_enc, df_original):
+        """유저별 시간 기반 분할: 각 유저의 interaction을 시간순으로 정렬 후 분할"""
+        # df_original에 timestamp가 있다고 가정
+        # timestamp 컬럼이 없으면 에러 발생
+        if "time" not in df_original.columns:
+            raise ValueError("Temporal split requires 'time' column in the data")
+
+        # df_enc에 timestamp 추가
+        df_enc = df_enc.copy()
+        df_enc["time"] = df_original["time"].values
+
+        train_rows = []
+        valid_gt = {u: [] for u in range(self.num_users)}
+
+        for u_idx in range(self.num_users):
+            user_df = df_enc[df_enc["user"] == u_idx].sort_values("time")
+            user_items = user_df["item"].tolist()
+            n_items = len(user_items)
+
+            if n_items == 0:
+                continue
+
+            # temporal_split_ratio 기준으로 분할 (예: 0.8 = 80% train, 20% valid)
+            split_idx = max(1, int(n_items * self.temporal_split_ratio))
+
+            train_items = user_items[:split_idx]
+            valid_items = user_items[split_idx:]
+
+            # validation ground truth 저장
+            valid_gt[u_idx] = valid_items
+
+            # train 데이터 저장
+            for it in train_items:
+                train_rows.append({"user": u_idx, "item": it})
+
+        train_df = pd.DataFrame(train_rows)
+        return train_df, valid_gt
+
+    def _train_valid_split_temporal_global(self, df_enc, df_original):
+        """전역 시간 기반 분할: 전체 데이터를 시간순으로 정렬 후 분할"""
+        if "time" not in df_original.columns:
+            raise ValueError("Temporal global split requires 'time' column in the data")
+
+        # df_enc에 timestamp 추가
+        df_enc = df_enc.copy()
+        df_enc["time"] = df_original["time"].values
+
+        # 전체 데이터를 시간순으로 정렬
+        df_sorted = df_enc.sort_values("time")
+
+        # temporal_split_ratio 기준으로 분할점 계산
+        split_idx = int(len(df_sorted) * self.temporal_split_ratio)
+
+        # Train/Valid 분할
+        train_df = df_sorted.iloc[:split_idx][["user", "item"]]
+        valid_df = df_sorted.iloc[split_idx:][["user", "item"]]
+
+        # Validation ground truth 구성 (user별로 그룹화)
+        valid_gt = {u: [] for u in range(self.num_users)}
+        for _, row in valid_df.iterrows():
+            user_idx = row["user"]
+            item_idx = row["item"]
+            valid_gt[user_idx].append(item_idx)
+
         return train_df, valid_gt
 
     def _build_user_item_matrix(self, df):

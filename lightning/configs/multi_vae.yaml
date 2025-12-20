@@ -1,7 +1,10 @@
 # Hydra configuration for MultiVAE (Collaborative Filtering)
 defaults:
-  - logging: default
-  - _self_
+  - common: default_setup  # 공통 설정 로드
+  - _self_                 # 현재 파일(autoencoder.yaml)의 설정이 우선함
+
+# 모델 이름 (Hydra 로그 디렉토리 구조에 사용)
+model_name: "multi-vae"
 
 # 데이터 설정
 data:
@@ -9,6 +12,9 @@ data:
   batch_size: 512
   valid_ratio: 0.1
   min_interactions: 5
+  data_file: "train_ratings_10k.csv"
+  split_strategy: "temporal_user"  # "random", "leave_one_out", "temporal_user", "temporal_global"
+  temporal_split_ratio: 0.8  # temporal split용 (0.8 = 80% train, 20% valid)
 
 # 모델 설정
 model:
@@ -17,7 +23,7 @@ model:
 
 # 학습 설정
 training:
-  max_epochs: 300
+  max_epochs: 10
   lr: 1e-3
   weight_decay: 0.01
   kl_max_weight: 0.2
@@ -30,14 +36,6 @@ trainer:
   val_check_interval: 1.0
   enable_progress_bar: true
   enable_model_summary: true
-
-# 로그 설정 (공통 설정 override)
-logging:
-  name: "multi-vae"
-
-# 기타 설정
-seed: 42
-float32_matmul_precision: "medium"
 
 # 추천 설정
 recommend:

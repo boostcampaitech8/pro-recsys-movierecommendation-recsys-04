@@ -1,7 +1,10 @@
+import logging
 import lightning as L
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+log = logging.getLogger(__name__)
 
 
 class MultiVAE(L.LightningModule):
@@ -64,6 +67,12 @@ class MultiVAE(L.LightningModule):
         self.decoder = nn.Sequential(*decoder_layers)
 
         self._init_weights()
+
+        # 모델 초기화 로그
+        log.info(f"MultiVAE initialized with {num_items} items")
+        log.info(f"Hidden dimensions: {hidden_dims}")
+        log.info(f"Dropout: {dropout}, LR: {lr}, Weight decay: {weight_decay}")
+        log.info(f"KL max weight: {kl_max_weight}, KL anneal steps: {kl_anneal_steps}")
 
     def _init_weights(self):
         for m in self.modules():
@@ -154,7 +163,9 @@ class MultiVAE(L.LightningModule):
         """
         학습 스텝: Reconstruction Loss + KL Loss 계산 및 KL Annealing 적용
         """
-        x = batch  # 유저-아이템 상호작용 벡터
+        x = (
+            batch[0] if isinstance(batch, (tuple, list)) else batch
+        )  # 유저-아이템 상호작용 벡터
         logits, mu, logvar = self(x)
 
         # Reconstruction Los
@@ -179,7 +190,7 @@ class MultiVAE(L.LightningModule):
         """
         검증 스텝: KL weight는 최대값 사용 (annealing 없음)
         """
-        x = batch
+        x = batch[0] if isinstance(batch, (tuple, list)) else batch
         logits, mu, logvar = self(x)
 
         # Reconstruction Loss
@@ -207,7 +218,10 @@ class MultiVAE(L.LightningModule):
         )
 
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=15, verbose=True
+            optimizer,
+            mode="min",
+            factor=0.5,
+            patience=15,
         )
 
         return {
