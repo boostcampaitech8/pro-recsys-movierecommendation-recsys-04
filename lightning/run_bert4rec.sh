@@ -16,21 +16,21 @@ echo ""
 case $MODE in
     train)
         echo "Starting training..."
-        python train_bert4rec.py
+        python train_bert4rec.py -cn bert4rec_improved
         ;;
 
     predict)
         echo "Starting inference..."
-        python predict_bert4rec.py
+        python predict_bert4rec.py -cn bert4rec_improved
         ;;
 
     both)
         echo "Starting training..."
-        python train_bert4rec.py
+        python train_bert4rec.py -cn bert4rec_improved
 
         echo ""
         echo "Training completed. Starting inference..."
-        python predict_bert4rec.py
+        python predict_bert4rec.py -cn bert4rec_improved
         ;;
 
     *)

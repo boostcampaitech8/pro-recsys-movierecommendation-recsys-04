@@ -32,7 +32,7 @@ training:
   weight_decay: 0.0         # L2 regularization
   save_dir: "saved/bert4rec"
   monitor_metric: "val_ndcg@10"  # Metric to monitor for checkpointing
-  early_stopping: false     # Enable early stopping
+  early_stopping: true     # Enable early stopping
   early_stopping_patience: 20
   accelerator: "auto"       # "cpu", "gpu", "tpu", or "auto"
   devices: "auto"           # Number of devices or "auto"
