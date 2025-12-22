@@ -5,8 +5,8 @@ import os
 # 1️⃣ 파일 경로
 # ===============================
 # 파일 경로
-path_a = "/data/ephemeral/home/Seung/output/LightGCN/LightGCN_200epochs/submission.csv"
-path_b = "/data/ephemeral/home/Seung/output/MultVAE/novalid epoch 200/submission.csv"
+path_a = "/data/ephemeral/home/Seung/output/MultVAE/novalid epoch 200/submission.csv"
+path_b = "/data/ephemeral/home/Seung/output/EASE/submission.csv"
 out_path = "/data/ephemeral/home/Seung/output/ensemble_submit.csv"
 
 # ===============================
@@ -47,7 +47,7 @@ df = pd.merge(
 # ===============================
 # 6️⃣ 앙상블 score
 # ===============================
-w1, w2 = 0.5, 0.5   # 필요하면 조정
+w1, w2 = 0.2, 0.8   # 필요하면 조정
 df["final_score"] = w1 * df["score_a"] + w2 * df["score_b"]
 
 # ===============================

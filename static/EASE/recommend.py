@@ -1,25 +1,18 @@
 import numpy as np
-import torch
 
 
-@torch.no_grad()
 def recommend_topk(
-    model,
-    norm_adj,
+    score_mat,
     train_mat,
     topk,
-    device,
     mask_train=True,
 ):
     """
-    LightGCN recommendation
-    - topk: 10 (제출용) or 100 (앙상블 후보)
-    - mask_train: train_mat 기준 seen item masking
+    score_mat: np.ndarray (num_users x num_items)
+    train_mat: csr_matrix
     """
 
-    model.eval()
-    user_emb, item_emb = model(norm_adj.to(device))
-    scores = (user_emb @ item_emb.T).cpu().numpy()
+    scores = score_mat.copy()
 
     if mask_train:
         for u in range(train_mat.shape[0]):

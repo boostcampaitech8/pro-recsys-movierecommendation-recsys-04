@@ -1,6 +1,6 @@
 import os
 import argparse
-import torch
+import numpy as np
 import pandas as pd
 
 from data_utils import (
@@ -10,9 +10,11 @@ from data_utils import (
     train_valid_split_random,
     set_seed,
 )
-from model import MultiVAE
-from trainer import MultiVAETrainer
+from metrics import recall_at_k
+from model import EASE
+from trainer import EASETrainer
 from recommend import recommend_topk
+from utils import build_valid_lists
 
 
 def main():
@@ -22,16 +24,12 @@ def main():
     # Paths
     # ===============================
     parser.add_argument("--data_dir", default="/data/ephemeral/home/Seung/data/train/")
-    parser.add_argument("--output_dir", default="/data/ephemeral/home/Seung/output/MultVAE/")
+    parser.add_argument("--output_dir", default="/data/ephemeral/home/Seung/output/EASE/")
 
     # ===============================
-    # Training
+    # EASE params
     # ===============================
-    parser.add_argument("--epochs", type=int, default=1000)
-    parser.add_argument("--batch_size", type=int, default=512)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--lambda_reg", type=float, default=300.0)
 
     # ===============================
     # Validation / Submission
@@ -39,19 +37,11 @@ def main():
     parser.add_argument("--valid_ratio", type=float, default=0.0)
     parser.add_argument("--eval_topk", type=int, default=10)
     parser.add_argument("--submit_topk", type=int, default=10)
-
-    # ===============================
-    # Early Stop
-    # ===============================
-    parser.add_argument("--early_stop_patience", type=int, default=500)
+    parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
-
     set_seed(args.seed)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     os.makedirs(args.output_dir, exist_ok=True)
-
-    ckpt_path = os.path.join(args.output_dir, "best.pt")
 
     # ===============================
     # Load & Encode
@@ -63,59 +53,57 @@ def main():
     num_items = len(it2i)
 
     # ===============================
-    # Train / Valid split
+    # Train / Valid Split
     # ===============================
     if args.valid_ratio > 0:
         train_df, valid_gt = train_valid_split_random(
-            df_enc, num_users, valid_ratio=args.valid_ratio
+            df_enc,
+            num_users=num_users,
+            valid_ratio=args.valid_ratio,
+            seed=args.seed,
         )
+        print(f"🧪 Validation ON (ratio={args.valid_ratio})")
     else:
         train_df = df_enc
         valid_gt = {u: [] for u in range(num_users)}
+        print("🧪 Validation OFF (final training)")
 
     train_mat = build_user_item_matrix(train_df, num_users, num_items)
+    
+    # 🔍 sanity check (중요!)
+    print("Original interactions:", len(df_enc))
+    print("Train matrix nnz:", train_mat.nnz)
 
     # ===============================
-    # Model & Trainer
+    # Train EASE
     # ===============================
-    model = MultiVAE(num_items)
-
-    trainer = MultiVAETrainer(
-        model=model,
-        train_mat=train_mat,
-        valid_gt=valid_gt,
-        num_items=num_items,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        device=device,
-        ckpt_path=ckpt_path,
-        early_stop_patience=args.early_stop_patience,
-    )
-
-    trainer.train(
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        topk=args.eval_topk,
-    )
+    model = EASE(lambda_reg=args.lambda_reg)
+    trainer = EASETrainer(model, train_mat)
+    trainer.train()
 
     # ===============================
-    # Load Best Model
+    # Predict
     # ===============================
-    best = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(best["model_state"])
+    score_mat = trainer.predict()
 
-    # ===============================
-    # Submission (Top-K selectable)
-    # ===============================
     rec = recommend_topk(
-        model=model,
-        train_mat=train_mat,
+        score_mat,
+        train_mat,
         topk=args.submit_topk,
-        device=device,
-        batch_size=args.batch_size,
         mask_train=True,
     )
 
+    # ===============================
+    # Validation
+    # ===============================
+    if args.valid_ratio > 0:
+        actual, pred = build_valid_lists(valid_gt, rec)
+        val_recall = recall_at_k(actual, pred, k=args.eval_topk)
+        print(f"📊 Validation Recall@{args.eval_topk}: {val_recall:.6f}")
+
+    # ===============================
+    # Submission
+    # ===============================
     rows = []
     for u_idx in range(num_users):
         for it in rec[u_idx]:
@@ -124,7 +112,7 @@ def main():
     out_path = os.path.join(args.output_dir, "submission.csv")
     pd.DataFrame(rows, columns=["user", "item"]).to_csv(out_path, index=False)
 
-    print("✅ Finished")
+    print("✅ submission.csv 생성 완료")
     print(f"submit_topk = {args.submit_topk}")
     print("Saved to:", out_path)
 
