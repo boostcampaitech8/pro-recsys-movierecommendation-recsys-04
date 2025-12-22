@@ -101,10 +101,14 @@ class MultiHeadAttention(nn.Module):
         residual = enc # residual connection을 위해 residual 부분을 저장
         batch_size, seqlen = enc.size(0), enc.size(1)
 
+        head_dim = self.hidden_units // self.num_heads
+        if head_dim * self.num_heads != self.hidden_units:
+            raise ValueError("hidden_units must be divisible by num_heads")
+
         # Query, Key, Value를 (num_head)개의 Head로 나누어 각기 다른 Linear projection을 통과시킴
-        Q = self.W_Q(enc).view(batch_size, seqlen, self.num_heads, self.hidden_units)
-        K = self.W_K(enc).view(batch_size, seqlen, self.num_heads, self.hidden_units)
-        V = self.W_V(enc).view(batch_size, seqlen, self.num_heads, self.hidden_units)
+        Q = self.W_Q(enc).view(batch_size, seqlen, self.num_heads, head_dim)
+        K = self.W_K(enc).view(batch_size, seqlen, self.num_heads, head_dim)
+        V = self.W_V(enc).view(batch_size, seqlen, self.num_heads, head_dim)
 
         # Head별로 각기 다른 attention이 가능하도록 Transpose 후 각각 attention에 통과시킴
         Q, K, V = Q.transpose(1, 2), K.transpose(1, 2), V.transpose(1, 2)
