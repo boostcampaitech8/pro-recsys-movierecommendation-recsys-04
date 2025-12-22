@@ -74,28 +74,59 @@ def main(cfg: DictConfig):
         batch_users = user_indices[start:end]
 
         seqs = []
+        mask_positions = []
         rated_sets = []
         for u in batch_users:
-            seq = (user_train[u] + [mask_token])[-cfg.model.max_len:]
+            # Create sequence with mask tokens at specific positions
+            seq = user_train[u][-cfg.model.max_len:]  # Get last max_len items
             if len(seq) < cfg.model.max_len:
                 seq = [0] * (cfg.model.max_len - len(seq)) + seq
+            
+            # Store original values at mask positions
+            mask_pos = [0, 25, 50, 75, -1]  # Positions to mask
+            masked_values = []
+            for pos in mask_pos:
+                if pos < len(seq):  # Ensure position is within sequence length
+                    masked_values.append(seq[pos])
+                    seq[pos] = mask_token
+            
             seqs.append(seq)
+            mask_positions.append(masked_values)
             rated_sets.append(set(user_train[u]))
 
         seqs = np.array(seqs, dtype=np.int64)
 
         with torch.no_grad():
             logits = model(seqs)
-            scores = logits[:, -1, :]
-
-            scores[:, 0] = -1e9
-            scores[:, mask_token] = -1e9
+            
+            # Initialize scores tensor with negative infinity
+            batch_size = logits.size(0)
+            num_items = logits.size(-1)
+            scores = torch.full((batch_size, 5, num_items), -1e9, device=device)
+            
+            # Get scores for each masked position
+            mask_positions_tensor = torch.tensor([0, 15, 25, 35, -1], device=device)
+            for i, pos in enumerate(mask_positions_tensor):
+                if pos < 0:  # Handle negative index for last position
+                    pos = logits.size(1) - 1
+                scores[:, i, :] = logits[:, pos, :]
+            
+            # Mask out invalid items
+            scores[:, :, 0] = -1e9  # Mask padding
+            scores[:, :, mask_token] = -1e9  # Mask mask_token itself
+            
+            # Mask out already rated items
             for i, rated in enumerate(rated_sets):
                 if rated:
-                    scores[i, list(rated)] = -1e9
-
-            _, top_items = torch.topk(scores, k=topk, dim=1)
-
+                    scores[i, :, list(rated)] = -1e9
+            
+            # Reshape to process pairs of positions
+            scores = scores.view(batch_size * 5, -1)
+            _, top_items = torch.topk(scores, k=2, dim=1)  # Get top2 items for each position
+            
+            # Reshape back to (batch_size, 5, top2)
+            top_items = top_items.view(batch_size, -1)
+            
         top_items = top_items.detach().cpu().numpy()
 
         for row_i, u in enumerate(batch_users):

@@ -3,7 +3,7 @@ data: '/data/ephemeral/home/data/train/train_ratings.csv'
 
 # 모델 설정
 model:
-  max_len: 50
+  max_len: 100
   hidden_units: 64
   num_heads: 4
   num_layers: 3
@@ -13,7 +13,7 @@ model:
 train:
   lr: 0.0015
   batch_size: 128
-  num_epochs: 300
+  num_epochs: 200
   mask_prob: 0.15 # for cloze task
   num_workers: 1
   save_dir: 'checkpoints'
@@ -24,3 +24,4 @@ inference:
   topk: 10
   batch_size: 256
   output_path: outputs/inference.csv
+  # checkpoint_path: checkpoint_epoch_180.pt
