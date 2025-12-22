@@ -82,7 +82,40 @@ def main(cfg: DictConfig):
 
             tbar.set_description(f'Epoch: {epoch:3d}| Step: {step:3d}| Train loss: {loss:.5f}')
 
+        
+
         if save_every and (epoch % int(save_every) == 0):
+            model.eval()
+            NDCG = 0.0  # NDCG@10
+            HIT = 0.0  # HIT@10
+            HIT_2 = 0.0  # HIT@2
+
+            num_item_sample = 100
+            num_user_sample = min(1000, num_user)
+
+            sampled_users = np.random.randint(0, num_user, num_user_sample)
+            for u in sampled_users:
+                seq = (user_train[u] + [num_item + 1])[-cfg.model.max_len:]
+                if len(seq) < cfg.model.max_len:
+                    seq = [0] * (cfg.model.max_len - len(seq)) + seq
+
+                rated = set(user_train[u] + user_valid[u])
+                item_idx = [user_valid[u][0]] + [random_neg(1, num_item + 1, rated) for _ in range(num_item_sample)]
+
+                with torch.no_grad():
+                    predictions = -model(np.array([seq]))
+                    predictions = predictions[0][-1][item_idx]
+                    rank = predictions.argsort().argsort()[0].item()
+
+                if rank < 10:
+                    NDCG += 1 / np.log2(rank + 2)
+                    HIT += 1
+
+                    if rank < 2:
+                        HIT_2 += 1
+
+            print(f'Valid NDCG@10: {NDCG/num_user_sample}| HIT@10: {HIT/num_user_sample}| HIT@2: {HIT_2/num_user_sample}')
+            model.train()
             extra = {
                 'num_user': num_user,
                 'num_item': num_item,

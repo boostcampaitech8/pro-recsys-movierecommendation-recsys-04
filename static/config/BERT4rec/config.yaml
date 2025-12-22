@@ -4,20 +4,20 @@ data: '/data/ephemeral/home/data/train/train_ratings.csv'
 # 모델 설정
 model:
   max_len: 50
-  hidden_units: 50
-  num_heads: 1
-  num_layers: 2
-  dropout_rate: 0.15
+  hidden_units: 64
+  num_heads: 4
+  num_layers: 3
+  dropout_rate: 0.3
 
 # 학습 설정
 train:
-  lr: 0.001
+  lr: 0.0015
   batch_size: 128
-  num_epochs: 100
-  mask_prob: 0.1 # for cloze task
+  num_epochs: 300
+  mask_prob: 0.15 # for cloze task
   num_workers: 1
   save_dir: 'checkpoints'
-  save_every: 50
+  save_every: 20
 
 # 추론 설정
 inference:
