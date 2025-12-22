@@ -1,0 +1,11 @@
+train_path: /data/ephemeral/home/minyou/data/raw/train/train_ratings.csv
+model: itemcf
+k_eval: 10
+k_rec: 10
+topk_sim: 200
+factors: 64
+reg: 0.01
+alpha: 40.0
+iters: 10
+seed: 42
+timestamp: '2025-12-21T16:46:38.417258'
