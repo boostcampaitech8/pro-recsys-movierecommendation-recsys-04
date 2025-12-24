@@ -43,6 +43,15 @@ streamlit run data_explorer/app.py
 - **분포 분석**: 아이템별 평가 수 분포 히스토그램
 - **Interaction Matrix**: User-Item 조합 통계
 
+### 📈 Tab 5: Advanced EDA
+심화 구조 분석
+
+- User / Item 인터랙션 분포 요약
+- 집중도 분석 (Top 1%, P99 / P50)
+- 사용자 기준 Cold-start 비율 분석
+- 전체 데이터 기준 장르 분포 분석
+
+
 ---
 
 ## 2. 필요한 데이터 파일
