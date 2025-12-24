@@ -23,6 +23,7 @@ from utils import (
     plot_concentration_analysis,
     plot_distribution_summary,
     analyze_user_segments,
+    segment_users,
     plot_user_segmentation,
     analyze_genre_combinations,
     find_rare_but_popular_combos,
@@ -931,28 +932,25 @@ def main():
                 [tab_seg1, tab_seg2, tab_seg3], ["Heavy", "Medium", "Light"]
             ):
                 with tab:
-                    segment_users = segment_df[segment_df["segment"] == segment_name]
-
+                    users_in_segment = segment_df[segment_df["segment"] == segment_name]
                     col_a, col_b, col_c = st.columns(3)
-                    col_a.metric("Count", f"{len(segment_users):,}")
+                    col_a.metric("Count", f"{len(users_in_segment):,}")
                     col_b.metric(
-                        "Avg Ratings", f"{segment_users['rating_count'].mean():.1f}"
+                        "Avg Ratings", f"{users_in_segment['rating_count'].mean():.1f}"
                     )
                     col_c.metric(
                         "Median Ratings",
-                        f"{segment_users['rating_count'].median():.0f}",
+                        f"{users_in_segment['rating_count'].median():.0f}",
                     )
 
-                    # If bulk rater info available
-                    if "is_bulk_rater" in segment_users.columns:
-                        bulk_ratio = segment_users["is_bulk_rater"].mean()
+                    if "is_bulk_rater" in users_in_segment.columns:
+                        bulk_ratio = users_in_segment["is_bulk_rater"].mean()
                         st.info(
                             f"📊 **{bulk_ratio*100:.1f}%** of {segment_name} users are Bulk Raters"
                         )
 
-                    # Top users in segment
                     st.write(f"**Top 10 {segment_name} Users**")
-                    top_in_segment = segment_users.nlargest(10, "rating_count")
+                    top_in_segment = users_in_segment.nlargest(10, "rating_count")
                     st.dataframe(
                         top_in_segment[["user", "rating_count"]],
                         use_container_width=True,
@@ -1417,233 +1415,162 @@ def main():
     # ==================== Tab 5: Advanced EDA ====================
     with tab5:
         st.header("📈 Advanced Exploratory Data Analysis")
-        st.markdown("다양한 EDA들")
+        st.markdown("대규모 연산이 포함된 심화 EDA 분석")
 
-        # Section: 분포 요약
+        # -------------------- State Init --------------------
+        if "advanced_eda_results" not in st.session_state:
+            st.session_state["advanced_eda_results"] = None
+
+        # -------------------- Run Button --------------------
+        st.info(
+            "⚠️ Advanced EDA는 계산량이 많습니다.\n\n"
+            "아래 버튼을 눌렀을 때만 분석이 시작됩니다."
+        )
+
+        run_clicked = st.button("🚀 Run Advanced EDA", type="primary")
+
+        # -------------------- Analysis Trigger --------------------
+        if run_clicked:
+            progress = st.progress(0)
+            status = st.empty()
+
+            # ==================== 1. Distribution Summary ====================
+            status.text("📊 [1/6] Computing distributions...")
+            user_counts = filtered_df.groupby("user")["item"].count()
+            item_counts = filtered_df.groupby("item")["user"].count()
+            progress.progress(0.15)
+
+            user_summary = dist_summary(user_counts, "User Interactions")
+            item_summary = dist_summary(item_counts, "Item Ratings")
+
+            # ==================== 2. Concentration Metrics ====================
+            status.text("🎯 [2/6] Calculating concentration metrics...")
+            metrics = calculate_concentration_metrics(filtered_df)
+            progress.progress(0.30)
+
+            # ==================== 3. Concentration Curve ====================
+            status.text("📈 [3/6] Plotting concentration curves...")
+            fig_dist = plot_distribution_summary(filtered_df)
+            fig_conc = plot_concentration_analysis(filtered_df)
+            progress.progress(0.45)
+
+            # ==================== 4. Cold Start ====================
+            status.text("❄️ [4/6] Analyzing cold-start users...")
+            cold_thresholds = [3, 10, 50, 100, 300, 500]
+            cold_ratios = [
+                cold_user_ratio(user_counts, k) * 100 for k in cold_thresholds
+            ]
+            progress.progress(0.60)
+
+            # ==================== 5. Genre Analysis ====================
+            status.text("🎭 [5/6] Analyzing genres...")
+            if not item_info_df.empty:
+                genre_df = analyze_genre_distribution(filtered_df, item_info_df)
+            else:
+                genre_df = None
+            progress.progress(0.80)
+
+            # ==================== 6. Insights ====================
+            status.text("💡 [6/6] Finalizing insights...")
+            progress.progress(1.0)
+
+            # -------------------- Save Results --------------------
+            st.session_state["advanced_eda_results"] = {
+                "user_counts": user_counts,
+                "item_counts": item_counts,
+                "user_summary": user_summary,
+                "item_summary": item_summary,
+                "metrics": metrics,
+                "fig_dist": fig_dist,
+                "fig_conc": fig_conc,
+                "cold_thresholds": cold_thresholds,
+                "cold_ratios": cold_ratios,
+                "genre_df": genre_df,
+            }
+
+            status.text("✅ Advanced EDA complete!")
+
+        # -------------------- Render Results --------------------
+        if st.session_state["advanced_eda_results"] is None:
+            st.info("👆 Run Advanced EDA 버튼을 눌러 분석을 시작하세요.")
+            st.stop()
+
+        res = st.session_state["advanced_eda_results"]
+
+        # ==================== Render: Distribution ====================
         st.subheader("📊 분포 요약")
 
-        user_counts = filtered_df.groupby("user")["item"].count()
-        item_counts = filtered_df.groupby("item")["user"].count()
-
         st.write("**User Interactions Distribution**")
-        user_summary = dist_summary(user_counts, "User Interactions")
-        st.dataframe(user_summary, use_container_width=True)
+        st.dataframe(res["user_summary"], use_container_width=True)
 
         st.write("**Item Popularity Distribution**")
-        item_summary = dist_summary(item_counts, "Item Ratings")
-        st.dataframe(item_summary, use_container_width=True)
+        st.dataframe(res["item_summary"], use_container_width=True)
 
-        # Visualization
-        fig_dist = plot_distribution_summary(filtered_df)
-        st.plotly_chart(fig_dist, use_container_width=True)
+        st.plotly_chart(res["fig_dist"], use_container_width=True)
 
-        # Section: Concentration Analysis
+        # ==================== Render: Concentration ====================
         st.markdown("---")
         st.subheader("🎯 Concentration Analysis")
-        st.markdown(
-            """
-        **상위 X%의 유저/아이템이 전체 인터랙션의 몇 %를 차지하는지**에 대한 분석.
-        - **가파른 곡선** = 소수의 엔티티가 대부분의 활동을 차지 (높은 집중도)
-        - **완만한 곡선** = 활동이 고르게 분산됨 (낮은 집중도)
-        """
-        )
 
-        # Calculate metrics
-        metrics = calculate_concentration_metrics(filtered_df)
+        m = res["metrics"]
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Top 1% Users Share", f"{m['top_1_pct']['user_share']*100:.1f}%")
+        col2.metric("Top 1% Items Share", f"{m['top_1_pct']['item_share']*100:.1f}%")
+        col3.metric("User P99/P50", f"{m['tail_ratios']['user_p99_p50']:.1f}x")
+        col4.metric("Item P99/P50", f"{m['tail_ratios']['item_p99_p50']:.1f}x")
 
-        # Display key metrics
-        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        st.plotly_chart(res["fig_conc"], use_container_width=True)
 
-        metric_col1.metric(
-            "Top 1% Users Share",
-            f"{metrics['top_1_pct']['user_share']*100:.1f}%",
-            help="상위 1% 유저가 차지하는 전체 인터랙션 비율",
-        )
-
-        metric_col2.metric(
-            "Top 1% Items Share",
-            f"{metrics['top_1_pct']['item_share']*100:.1f}%",
-            help="상위 1% 아이템이 차지하는 전체 인터랙션 비율",
-        )
-
-        metric_col3.metric(
-            "User Long-tail (P99/P50)",
-            f"{metrics['tail_ratios']['user_p99_p50']:.1f}x",
-            help="상위 1% 유저가 중간 유저보다 몇 배 더 활동적인지",
-        )
-
-        metric_col4.metric(
-            "Item Long-tail (P99/P50)",
-            f"{metrics['tail_ratios']['item_p99_p50']:.1f}x",
-            help="상위 1% 아이템이 중간 아이템보다 몇 배 더 인기있는지",
-        )
-
-        # Plot concentration curve
-        fig_conc = plot_concentration_analysis(filtered_df)
-        st.plotly_chart(fig_conc, use_container_width=True)
-
-        # Heavy share table
-        st.write("**Detailed Concentration Breakdown**")
-        heavy_data = []
-        for pct in [0.1, 0.5, 1, 5, 10, 20]:
-            user_hs = heavy_share(user_counts, pct)
-            item_hs = heavy_share(item_counts, pct)
-            heavy_data.append(
-                {
-                    "Top %": f"{pct}%",
-                    "User Count": f"{user_hs['k']:,}",
-                    "User Share": f"{user_hs['share']*100:.1f}%",
-                    "Item Count": f"{item_hs['k']:,}",
-                    "Item Share": f"{item_hs['share']*100:.1f}%",
-                }
-            )
-
-        heavy_df = pd.DataFrame(heavy_data)
-        st.dataframe(heavy_df, use_container_width=True)
-
-        # Section: Cold Start Analysis
+        # ==================== Render: Cold Start ====================
         st.markdown("---")
         st.subheader("❄️ Cold Start Analysis")
-        st.markdown(
-            """
-        **Cold Users**: 인터랙션이 매우 적은 유저 (추천이 어려움)
-        - ≤ 3개: 극도로 적음
-        - ≤ 10개: 매우 적음
-        - ≤ 50개: 적음
-        - ≤ 100개: 보통
-        """
-        )
 
-        cold_col1, cold_col2, cold_col3, cold_col4 = st.columns(4)
-
-        cold_col1.metric(
-            "≤ 3 Interactions",
-            f"{metrics['cold_users']['le_3']*100:.1f}%",
-            help="3개 이하 인터랙션 유저 비율",
-        )
-
-        cold_col2.metric(
-            "≤ 10 Interactions",
-            f"{metrics['cold_users']['le_10']*100:.1f}%",
-            help="10개 이하 인터랙션 유저 비율",
-        )
-
-        cold_col3.metric(
-            "≤ 50 Interactions",
-            f"{metrics['cold_users']['le_50']*100:.1f}%",
-            help="50개 이하 인터랙션 유저 비율",
-        )
-
-        cold_col4.metric(
-            "≤ 100 Interactions",
-            f"{metrics['cold_users']['le_100']*100:.1f}%",
-            help="100개 이하 인터랙션 유저 비율",
-        )
-
-        # Cold user distribution
-        cold_thresholds = [3, 10, 50, 100, 300, 500]
-        cold_ratios = [cold_user_ratio(user_counts, k) * 100 for k in cold_thresholds]
-
-        fig_cold = go.Figure()
-        fig_cold.add_trace(
+        fig_cold = go.Figure(
             go.Bar(
-                x=[f"≤ {k}" for k in cold_thresholds],
-                y=cold_ratios,
+                x=[f"≤ {k}" for k in res["cold_thresholds"]],
+                y=res["cold_ratios"],
                 marker_color="lightblue",
             )
         )
         fig_cold.update_layout(
-            title="Cold User Distribution by Threshold",
-            xaxis_title="Interaction Threshold",
             yaxis_title="% of Users",
             height=400,
         )
         st.plotly_chart(fig_cold, use_container_width=True)
 
-        # Section 4: Genre Analysis
+        # ==================== Render: Genre ====================
         st.markdown("---")
         st.subheader("🎭 Genre Analysis")
 
-        if not item_info_df.empty:
-            # Overall genre distribution
-            st.write("**Overall Genre Distribution**")
-            genre_df = analyze_genre_distribution(filtered_df, item_info_df)
-
-            if genre_df is not None and not genre_df.empty:
-                col_genre1, col_genre2 = st.columns([1, 2])
-
-                with col_genre1:
-                    st.dataframe(genre_df.head(20), use_container_width=True)
-
-                with col_genre2:
-                    fig_genre = plot_genre_distribution(
-                        genre_df, "All Ratings - Genre Distribution"
-                    )
-                    if fig_genre:
-                        st.plotly_chart(fig_genre, use_container_width=True)
-
-                # Top N popular items genre analysis
-                st.markdown("---")
-                st.write("**Genre Distribution in Popular Items**")
-
-                top_n = st.slider(
-                    "Top N Popular Items", 100, 5000, 500, 100, key="genre_top_n"
+        if res["genre_df"] is not None and not res["genre_df"].empty:
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.dataframe(res["genre_df"].head(20), use_container_width=True)
+            with col2:
+                fig_genre = plot_genre_distribution(
+                    res["genre_df"], "All Ratings - Genre Distribution"
                 )
-
-                genre_top_df = analyze_genre_distribution(
-                    filtered_df, item_info_df, top_n=top_n
-                )
-
-                if genre_top_df is not None and not genre_top_df.empty:
-                    fig_genre_top = plot_genre_distribution(
-                        genre_top_df, f"Top {top_n} Popular Items - Genre Distribution"
-                    )
-                    if fig_genre_top:
-                        st.plotly_chart(fig_genre_top, use_container_width=True)
-            else:
-                st.info("Genre information not available in item_info data.")
+                if fig_genre:
+                    st.plotly_chart(fig_genre, use_container_width=True)
         else:
-            st.info("Load item information to see genre analysis.")
+            st.info("Genre metadata not available.")
 
-        # Section 5: Data Insights Summary
+        # ==================== Render: Insights ====================
         st.markdown("---")
         st.subheader("💡 Key Insights")
 
         insights = []
-
-        # Long-tail insight
-        user_tail = metrics["tail_ratios"]["user_p99_p50"]
-        item_tail = metrics["tail_ratios"]["item_p99_p50"]
-
-        if item_tail > user_tail:
-            insights.append(
-                f"📌 **Long-tail 구조**: 아이템 분포가 유저 분포보다 **{item_tail/user_tail:.1f}배 더 long-tail**입니다. 소수의 인기 아이템에 인터랙션이 집중되어 있습니다."
-            )
+        if m["tail_ratios"]["item_p99_p50"] > m["tail_ratios"]["user_p99_p50"]:
+            insights.append("• 아이템 분포가 유저 분포보다 더 long-tail 구조입니다.")
         else:
-            insights.append(
-                f"📌 **활동 집중도**: 유저 활동이 아이템 인기도보다 **{user_tail/item_tail:.1f}배 더 집중**되어 있습니다. 소수의 heavy user가 대부분의 활동을 담당합니다."
-            )
-
-        # Cold user insight
-        if metrics["cold_users"]["le_3"] < 0.1:
-            insights.append(
-                f"📌 **Cold Start 문제 적음**: 인터랙션 3개 이하 유저가 **{metrics['cold_users']['le_3']*100:.1f}%**로 매우 적습니다. 대부분 유저가 충분한 데이터를 가지고 있습니다."
-            )
-        elif metrics["cold_users"]["le_3"] > 0.3:
-            insights.append(
-                f"📌 **Cold Start 문제 심각**: 인터랙션 3개 이하 유저가 **{metrics['cold_users']['le_3']*100:.1f}%**로 높습니다. Cold start 전략이 필수적입니다."
-            )
-
-        # Concentration insight
-        top1_user = metrics["top_1_pct"]["user_share"]
-        top1_item = metrics["top_1_pct"]["item_share"]
+            insights.append("• 유저 활동이 아이템 인기도보다 더 집중되어 있습니다.")
 
         insights.append(
-            f"📌 **집중도 분석**: 상위 1% 유저가 **{top1_user*100:.1f}%**, 상위 1% 아이템이 **{top1_item*100:.1f}%**의 인터랙션을 차지합니다."
+            f"• 상위 1% 유저가 전체 인터랙션의 {m['top_1_pct']['user_share']*100:.1f}%를 차지합니다."
         )
 
-        for insight in insights:
-            st.markdown(insight)
+        for ins in insights:
+            st.markdown(ins)
 
 
 if __name__ == "__main__":
