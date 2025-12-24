@@ -46,8 +46,6 @@ def main(cfg: DictConfig):
         data_file=cfg.data.data_file,
         split_strategy=cfg.data.split_strategy,
         temporal_split_ratio=cfg.data.temporal_split_ratio,
-        use_cache=cfg.data_cache.use_cache,
-        cache_dir=cfg.data_cache.cache_dir,
     )
 
     # Setup data

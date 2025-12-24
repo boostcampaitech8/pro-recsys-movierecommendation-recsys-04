@@ -10,7 +10,7 @@ model_name: bert4rec
 # 데이터 설정
 data:
   data_dir: "~/data/train/"
-  data_file: "train_ratings.csv"
+  data_file: "train_ratings_del_300sec.csv"
   batch_size: 256              # 증가 (원래: 128)
   min_interactions: 3
   seed: 42

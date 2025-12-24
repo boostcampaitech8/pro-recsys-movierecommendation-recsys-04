@@ -30,10 +30,6 @@ training:
   num_epochs: 300
   lr: 0.0015                # Learning rate
   weight_decay: 0.0         # L2 regularization
-  save_dir: "saved/bert4rec"
-  monitor_metric: "val_ndcg@10"  # Metric to monitor for checkpointing
-  early_stopping: true     # Enable early stopping
-  early_stopping_patience: 20
   accelerator: "auto"       # "cpu", "gpu", "tpu", or "auto"
   devices: "auto"           # Number of devices or "auto"
   log_every_n_steps: 50
@@ -42,6 +38,12 @@ training:
   deterministic: false      # For reproducibility (slower)
   precision: "32-true"      # "32-true", "16-mixed", "bf16-mixed"
 
+  # Early stopping
+  early_stopping: true
+  early_stopping_patience: 20  # 증가 (원래: 10)
+  monitor_metric: "val_ndcg@10"
+  
+# Checkpoint 설정
 checkpoint:
   save_top_k: 1
   monitor: "val_ndcg@10"
