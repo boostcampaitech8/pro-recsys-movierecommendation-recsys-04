@@ -1,8 +1,6 @@
 import os
 import logging
 import random
-import pickle
-import hashlib
 import numpy as np
 import pandas as pd
 import lightning as L
@@ -43,8 +41,6 @@ class RecSysDataModule(L.LightningDataModule):
         data_file="train_ratings.csv",
         split_strategy: str = "random",
         temporal_split_ratio: float = 0.8,
-        use_cache: bool = True,
-        cache_dir: str = "~/.cache/recsys",
     ):
         super().__init__()
         self.data_dir = os.path.expanduser(data_dir)
@@ -55,8 +51,6 @@ class RecSysDataModule(L.LightningDataModule):
         self.data_file = data_file
         self.split_strategy = split_strategy
         self.temporal_split_ratio = temporal_split_ratio
-        self.use_cache = use_cache
-        self.cache_dir = os.path.expanduser(cache_dir)
 
         # 인코딩 매핑 (setup 후 사용 가능)
         self.user2idx = None  # user_id -> user_idx
@@ -83,56 +77,46 @@ class RecSysDataModule(L.LightningDataModule):
         if self.num_users:  # 이미 초기화 되어 있으면 skip
             log.info("Skip as RecSysDataModule is already initialized")
         else:
-            # Try to load from cache first
-            cache_loaded = False
-            if self.use_cache:
-                cache_loaded = self._load_from_cache()
+            # 1. 상호작용 데이터 읽기
+            log.info("Step 1/4: Reading interaction data...")
+            df = self._read_interactions()
+            log.info(f"  - Loaded {len(df):,} interactions")
 
-            if not cache_loaded:
-                # 1. 상호작용 데이터 읽기
-                log.info("Step 1/4: Reading interaction data...")
-                df = self._read_interactions()
-                log.info(f"  - Loaded {len(df):,} interactions")
+            # 2. ID 인코딩 (user_id, item_id -> 연속적인 인덱스)
+            log.info("Step 2/4: Encoding user/item IDs...")
+            df_enc = self._encode_ids(df)
+            log.info(f"  - Users: {self.num_users:,}, Items: {self.num_items:,}")
 
-                # 2. ID 인코딩 (user_id, item_id -> 연속적인 인덱스)
-                log.info("Step 2/4: Encoding user/item IDs...")
-                df_enc = self._encode_ids(df)
-                log.info(f"  - Users: {self.num_users:,}, Items: {self.num_items:,}")
-
-                # 3. Train/Valid 분할
-                log.info(f"Step 3/4: Splitting train/validation data (strategy: {self.split_strategy})...")
-                temporal_strategies = ["temporal_user", "temporal_global"]
-                if self.valid_ratio > 0 or self.split_strategy in ["leave_one_out"] + temporal_strategies:
-                    if self.split_strategy == "random":
-                        train_df, self.valid_gt = self._train_valid_split_random(df_enc)
-                    elif self.split_strategy == "leave_one_out":
-                        train_df, self.valid_gt = self._train_valid_split_leave_one_out_optimized(df_enc)
-                    elif self.split_strategy == "temporal_user":
-                        train_df, self.valid_gt = self._train_valid_split_temporal_user(df_enc, df)
-                    elif self.split_strategy == "temporal_global":
-                        train_df, self.valid_gt = self._train_valid_split_temporal_global(df_enc, df)
-                    else:
-                        raise ValueError(f"Unknown split_strategy: {self.split_strategy}")
-
-                    n_valid = sum(len(items) for items in self.valid_gt.values())
-                    log.info(f"  - Train: {len(train_df):,} interactions")
-                    log.info(f"  - Valid: {n_valid:,} interactions")
+            # 3. Train/Valid 분할
+            log.info(f"Step 3/4: Splitting train/validation data (strategy: {self.split_strategy})...")
+            temporal_strategies = ["temporal_user", "temporal_global"]
+            if self.valid_ratio > 0 or self.split_strategy in ["leave_one_out"] + temporal_strategies:
+                if self.split_strategy == "random":
+                    train_df, self.valid_gt = self._train_valid_split_random(df_enc)
+                elif self.split_strategy == "leave_one_out":
+                    train_df, self.valid_gt = self._train_valid_split_leave_one_out_optimized(df_enc)
+                elif self.split_strategy == "temporal_user":
+                    train_df, self.valid_gt = self._train_valid_split_temporal_user(df_enc, df)
+                elif self.split_strategy == "temporal_global":
+                    train_df, self.valid_gt = self._train_valid_split_temporal_global(df_enc, df)
                 else:
-                    train_df = df_enc
-                    self.valid_gt = {u: [] for u in range(self.num_users)}
-                    log.info(f"  - Train: {len(train_df):,} interactions (no validation)")
+                    raise ValueError(f"Unknown split_strategy: {self.split_strategy}")
 
-                # 4. Sparse Matrix 생성 (CSR 형식)
-                log.info("Step 4/4: Building sparse user-item matrix...")
-                self.train_mat = self._build_user_item_matrix(train_df)
-                log.info(f"  - Matrix shape: {self.train_mat.shape}")
-                log.info(
-                    f"  - Sparsity: {100 * (1 - self.train_mat.nnz / (self.num_users * self.num_items)):.2f}%"
-                )
+                n_valid = sum(len(items) for items in self.valid_gt.values())
+                log.info(f"  - Train: {len(train_df):,} interactions")
+                log.info(f"  - Valid: {n_valid:,} interactions")
+            else:
+                train_df = df_enc
+                self.valid_gt = {u: [] for u in range(self.num_users)}
+                log.info(f"  - Train: {len(train_df):,} interactions (no validation)")
 
-                # Save to cache
-                if self.use_cache:
-                    self._save_to_cache()
+            # 4. Sparse Matrix 생성 (CSR 형식)
+            log.info("Step 4/4: Building sparse user-item matrix...")
+            self.train_mat = self._build_user_item_matrix(train_df)
+            log.info(f"  - Matrix shape: {self.train_mat.shape}")
+            log.info(
+                f"  - Sparsity: {100 * (1 - self.train_mat.nnz / (self.num_users * self.num_items)):.2f}%"
+            )
 
         log.info("DataModule setup complete!")
         log.info("=" * 60)
@@ -409,85 +393,3 @@ class RecSysDataModule(L.LightningDataModule):
         )
 
         return full_mat
-
-    def _get_cache_key(self):
-        """캐시 키 생성 (설정에 따라 고유한 해시)"""
-        # 캐시를 구분하는 파라미터들
-        key_params = {
-            "data_file": self.data_file,
-            "split_strategy": self.split_strategy,
-            "seed": self.seed,
-            "min_interactions": self.min_interactions,
-            "valid_ratio": self.valid_ratio,
-            "temporal_split_ratio": self.temporal_split_ratio,
-        }
-
-        # 딕셔너리를 문자열로 변환 후 해시
-        key_str = str(sorted(key_params.items()))
-        hash_obj = hashlib.md5(key_str.encode())
-        return hash_obj.hexdigest()
-
-    def _get_cache_path(self):
-        """캐시 파일 경로 생성"""
-        cache_key = self._get_cache_key()
-        os.makedirs(self.cache_dir, exist_ok=True)
-        return os.path.join(self.cache_dir, f"recsys_data_{cache_key}.pkl")
-
-    def _save_to_cache(self):
-        """현재 데이터를 캐시에 저장"""
-        try:
-            cache_path = self._get_cache_path()
-
-            cache_data = {
-                "user2idx": self.user2idx,
-                "idx2user": self.idx2user,
-                "item2idx": self.item2idx,
-                "idx2item": self.idx2item,
-                "num_users": self.num_users,
-                "num_items": self.num_items,
-                "train_mat": self.train_mat,
-                "valid_gt": self.valid_gt,
-            }
-
-            with open(cache_path, "wb") as f:
-                pickle.dump(cache_data, f)
-
-            log.info(f"✅ Cached data saved to: {cache_path}")
-        except Exception as e:
-            log.warning(f"Failed to save cache: {e}")
-
-    def _load_from_cache(self):
-        """캐시에서 데이터 로드"""
-        try:
-            cache_path = self._get_cache_path()
-
-            if not os.path.exists(cache_path):
-                log.info(f"Cache not found: {cache_path}")
-                return False
-
-            log.info(f"Loading from cache: {cache_path}")
-
-            with open(cache_path, "rb") as f:
-                cache_data = pickle.load(f)
-
-            self.user2idx = cache_data["user2idx"]
-            self.idx2user = cache_data["idx2user"]
-            self.item2idx = cache_data["item2idx"]
-            self.idx2item = cache_data["idx2item"]
-            self.num_users = cache_data["num_users"]
-            self.num_items = cache_data["num_items"]
-            self.train_mat = cache_data["train_mat"]
-            self.valid_gt = cache_data["valid_gt"]
-
-            n_valid = sum(len(items) for items in self.valid_gt.values())
-            log.info(f"✅ Cache loaded successfully!")
-            log.info(f"  - Users: {self.num_users:,}, Items: {self.num_items:,}")
-            log.info(f"  - Train: {self.train_mat.nnz:,} interactions")
-            log.info(f"  - Valid: {n_valid:,} interactions")
-            log.info(f"  - Matrix shape: {self.train_mat.shape}")
-
-            return True
-
-        except Exception as e:
-            log.warning(f"Failed to load cache: {e}")
-            return False

@@ -158,14 +158,11 @@ checkpoint_dir, tensorboard_dir = get_directories(cfg, stage="predict")
 # - train           Train only
 # - predict         Predict only
 # - both            Train + Predict (default)
-# - clean           Clean cache only
-# - clean-train     Clean cache + Train
-# - clean-both      Clean cache + Train + Predict
 ```
 
 **예시**:
 ```bash
-./run_multi_vae.sh clean-both multi_vae_v2
+./run_multi_vae.sh both multi_vae_v2
 ```
 
 **참조**: [run_bert4rec.sh](../run_bert4rec.sh) 패턴 적용
@@ -194,58 +191,6 @@ for u_idx in range(num_users):
 
 **성능 향상**:
 - 30초 → 0.1초 (300배 개선)
-
-### 4.2 디스크 캐싱 시스템 도입
-
-**목적**: 동일 설정으로 재실행 시 데이터 로딩 시간 단축
-
-**구현** ([recsys_data.py:358-438](../src/data/recsys_data.py#L358-L438)):
-
-```python
-class RecSysDataModule:
-    def __init__(self, ..., use_cache=True, cache_dir="~/.cache/recsys"):
-        ...
-
-    def _get_cache_key(self):
-        """설정 기반 MD5 해시 생성"""
-        key_params = {
-            "data_file": self.data_file,
-            "split_strategy": self.split_strategy,
-            "seed": self.seed,
-            "min_interactions": self.min_interactions,
-            ...
-        }
-        return hashlib.md5(str(sorted(key_params.items())).encode()).hexdigest()
-
-    def _save_to_cache(self):
-        """train_mat, valid_gt 등을 pickle로 저장"""
-
-    def _load_from_cache(self):
-        """캐시 로드 (설정이 동일하면)"""
-```
-
-**캐시 내용**:
-- `user2idx`, `idx2user`, `item2idx`, `idx2item`: ID 매핑
-- `num_users`, `num_items`: 메타데이터
-- `train_mat`: Sparse matrix (CSR)
-- `valid_gt`: Validation ground truth
-
-**설정** ([default_setup.yaml:34-37](../configs/common/default_setup.yaml#L34-L37)):
-```yaml
-data_cache:
-  use_cache: true
-  cache_dir: ~/.cache/recsys
-```
-
-**성능**:
-- 첫 실행: 30초 (데이터 로드 + 전처리 + 캐시 저장)
-- 재실행: 0.1초 (캐시 로드만)
-
-**캐시 관리**:
-```bash
-./run_multi_vae.sh clean        # 캐시 삭제
-./run_multi_vae.sh clean-train  # 캐시 삭제 + 학습
-```
 
 ---
 
@@ -284,7 +229,7 @@ num_workers = cfg.data.num_workers
 ```
 configs/
 ├── common/
-│   └── default_setup.yaml       # 공통 설정 (checkpoint, seed, cache 등)
+│   └── default_setup.yaml       # 공통 설정 (checkpoint, seed 등)
 ├── bert4rec_v2.yaml             # BERT4Rec 설정
 └── multi_vae_v2.yaml            # MultiVAE 설정 (개선 버전)
 ```
@@ -301,11 +246,6 @@ checkpoint:
   save_top_k: 1
   monitor: "val_loss"
   mode: "min"
-
-# Data caching 설정
-data_cache:
-  use_cache: true
-  cache_dir: ~/.cache/recsys
 
 # 기타
 seed: 42
@@ -385,8 +325,7 @@ for layer_idx in range(cfg.model.num_layers):
 
 | 작업 | Before | After |
 |-----|--------|-------|
-| Leave-one-out split | 30초 | 1초 |
-| 재실행 (캐시 활용) | 30초 | 1초 |
+| Leave-one-out split | 30초 | 0.1초 (300배 개선) |
 
 ---
 
