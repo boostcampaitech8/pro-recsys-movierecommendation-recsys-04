@@ -10,7 +10,7 @@ model_name: multi-vae
 # 데이터 설정
 data:
   data_dir: "~/data/train/"
-  data_file: "train_ratings.csv"
+  data_file: "train_ratings_del_300sec.csv"
   batch_size: 128                    # sparse data에서 작은 배치 선호
   valid_ratio: 0.1
   min_interactions: 5
