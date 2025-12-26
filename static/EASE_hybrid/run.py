@@ -39,7 +39,7 @@ def main():
     parser.add_argument(
         "--lambda_reg",
         type=float,
-        default=500.0,
+        default=800.0,
     )
     parser.add_argument(
         "--valid_ratio",
