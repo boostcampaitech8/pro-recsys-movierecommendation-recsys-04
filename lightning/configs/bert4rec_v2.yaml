@@ -15,6 +15,7 @@ data:
   min_interactions: 3
   seed: 42
   num_workers: 4
+  use_full_data: false          # true: 전체데이터사용/val_check사용안함/earlystop 사용안함, false: train/validation split
 
 # 모델 설정 - 논문 기준으로 증가
 model:

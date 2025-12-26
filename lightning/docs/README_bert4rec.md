@@ -31,8 +31,11 @@ lightning/
 ### 1. 학습
 
 ```bash
-# 기본 설정으로 학습
+# 기본 설정으로 학습 (validation 포함)
 python train_bert4rec.py
+
+# Full data 학습 (validation 없이 전체 데이터 사용)
+python train_bert4rec.py data.use_full_data=true
 
 # 하이퍼파라미터 오버라이드
 python train_bert4rec.py model.hidden_units=128 training.lr=0.001
@@ -88,9 +91,16 @@ data:
   batch_size: 128                  # 배치 크기
   min_interactions: 3              # 최소 interaction 수
   num_workers: 4                   # DataLoader workers
+  use_full_data: false             # Full data 학습 (validation 없음)
 ```
 
 **데이터 포맷**: CSV with columns `user`, `item`, `time` (optional)
+
+**Full Data 학습 모드** (`use_full_data: true`):
+- Validation split 없이 전체 데이터로 학습
+- Early stopping 자동 비활성화
+- Checkpoint는 `train_loss` 기준으로 저장
+- 최종 제출용 모델 학습 시 권장
 
 ### 모델 설정
 
@@ -217,6 +227,47 @@ NDCG@K = 1 / log₂(rank + 2)  if rank < K else 0
 MRR = 1 / rank
 ```
 
+## 학습 모드
+
+### Standard 모드 (기본값: `use_full_data: false`)
+
+```bash
+python train_bert4rec.py
+```
+
+**특징**:
+- ✅ Train/Validation split 자동 생성 (마지막 아이템)
+- ✅ Validation 메트릭 계산 (Hit@10, NDCG@10)
+- ✅ Early stopping 활성화
+- ✅ Checkpoint: `val_ndcg@10` 기준 저장
+- ✅ 하이퍼파라미터 튜닝 시 권장
+
+**체크포인트 파일명**: `bert4rec-{epoch:02d}-{val_ndcg@10:.4f}.ckpt`
+
+### Full Data 모드 (`use_full_data: true`)
+
+```bash
+python train_bert4rec.py data.use_full_data=true
+```
+
+**특징**:
+- ✅ 전체 데이터로 학습 (validation split 없음)
+- ✅ Early stopping 자동 비활성화
+- ✅ Checkpoint: `train_loss` 기준 저장
+- ✅ 최종 제출용 모델 학습 시 권장
+- ⚠️ Overfitting 확인 불가 (epoch 수 조절 필요)
+
+**체크포인트 파일명**: `bert4rec-{epoch:02d}-{train_loss:.4f}.ckpt`
+
+**자동 조정 사항**:
+| 설정 | Standard 모드 | Full Data 모드 |
+|------|--------------|----------------|
+| Train data | `seq[:-1]` | `seq` (전체) |
+| Validation | 활성화 | 비활성화 |
+| Early stopping | 활성화 | 비활성화 |
+| Checkpoint metric | `val_ndcg@10` | `train_loss` |
+| Checkpoint mode | `max` | `min` |
+
 ## PyTorch Lightning 기능
 
 ### 자동 제공되는 기능
@@ -225,7 +276,7 @@ MRR = 1 / rank
 2. **체크포인트 관리**:
    - `last.ckpt`: 마지막 epoch
    - `best.ckpt`: 최고 성능 모델
-3. **Early Stopping**: Validation 성능 개선 없으면 중단
+3. **Early Stopping**: Validation 성능 개선 없으면 중단 (Standard 모드)
 4. **로깅**: TensorBoard 자동 로깅
 5. **재현성**: Seed 설정으로 재현 가능
 

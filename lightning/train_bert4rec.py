@@ -53,6 +53,7 @@ def main(cfg: DictConfig):
         min_interactions=cfg.data.min_interactions,
         seed=cfg.data.seed,
         num_workers=cfg.data.num_workers,
+        use_full_data=cfg.data.use_full_data,
     )
 
     # Setup data to get num_items
@@ -76,7 +77,7 @@ def main(cfg: DictConfig):
     )
 
     # Get checkpoint and TensorBoard directories
-    checkpoint_dir, tensorboard_dir = get_directories(cfg, stage='fit')
+    checkpoint_dir, tensorboard_dir = get_directories(cfg, stage="fit")
     log.info(f"Checkpoint directory: {checkpoint_dir}")
     log.info(f"TensorBoard directory: {tensorboard_dir}")
 
@@ -89,19 +90,38 @@ def main(cfg: DictConfig):
     # Callbacks
     callbacks = []
 
-    # ModelCheckpoint: Save best model based on validation metric
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=checkpoint_dir,  # 실행마다 고유한 경로
-        filename="bert4rec-{epoch:02d}-{val_ndcg@10:.4f}",
-        monitor=cfg.checkpoint.monitor,
-        mode=cfg.checkpoint.mode,
-        save_top_k=cfg.checkpoint.save_top_k,
-        verbose=True,
-    )
+    # ModelCheckpoint: Save best model based on validation or training metric
+    use_full_data = cfg.data.use_full_data
+
+    if use_full_data:
+        # Full data training: monitor train_loss
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="bert4rec-{epoch:02d}-{train_loss:.4f}",
+            monitor="train_loss",
+            mode="min",
+            save_top_k=cfg.checkpoint.save_top_k,
+            verbose=True,
+        )
+        log.info("Checkpoint monitoring: train_loss (use_full_data=True)")
+    else:
+        # Standard training: monitor validation metric
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename="bert4rec-{epoch:02d}-{val_ndcg@10:.4f}",
+            monitor=cfg.checkpoint.monitor,
+            mode=cfg.checkpoint.mode,
+            save_top_k=cfg.checkpoint.save_top_k,
+            verbose=True,
+        )
+        log.info(f"Checkpoint monitoring: {cfg.checkpoint.monitor}")
+
     callbacks.append(checkpoint_callback)
 
     # EarlyStopping: Stop training if validation metric doesn't improve
-    if cfg.training.early_stopping:
+    # Disable early stopping when using full data (no validation)
+    use_full_data = cfg.data.use_full_data
+    if cfg.training.early_stopping and not use_full_data:
         early_stopping = EarlyStopping(
             monitor=cfg.checkpoint.monitor,
             patience=cfg.training.early_stopping_patience,
@@ -109,6 +129,9 @@ def main(cfg: DictConfig):
             verbose=True,
         )
         callbacks.append(early_stopping)
+        log.info("Early stopping enabled")
+    elif use_full_data:
+        log.info("Early stopping disabled (use_full_data=True)")
 
     # LearningRateMonitor: Log learning rate
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
@@ -131,7 +154,12 @@ def main(cfg: DictConfig):
 
     # Train
     log.info("Starting training...")
-    trainer.fit(model, datamodule=datamodule)
+    if use_full_data:
+        # Full data training: no validation
+        trainer.fit(model, train_dataloaders=datamodule.train_dataloader())
+    else:
+        # Standard training: with validation
+        trainer.fit(model, datamodule=datamodule)
 
     # Load best model and log final metrics
     log.info("Training completed!")

@@ -196,6 +196,7 @@ class BERT4RecDataModule(L.LightningDataModule):
         min_interactions: int = 3,
         seed: int = 42,
         num_workers: int = 4,
+        use_full_data: bool = False,
     ):
         super().__init__()
         self.data_dir = os.path.expanduser(data_dir)
@@ -206,6 +207,7 @@ class BERT4RecDataModule(L.LightningDataModule):
         self.min_interactions = min_interactions
         self.seed = seed
         self.num_workers = num_workers
+        self.use_full_data = use_full_data
 
         # Special tokens
         self.pad_token = 0
@@ -303,8 +305,14 @@ class BERT4RecDataModule(L.LightningDataModule):
         self.user_valid = {}
 
         for user, seq in user_sequences.items():
-            self.user_train[user] = seq[:-1]
-            self.user_valid[user] = seq[-1]  # Last item
+            if self.use_full_data:
+                # train data = full data, valid data = dummy
+                self.user_train[user] = seq
+                self.user_valid[user] = seq[-1]  # Dummy
+            else:
+                # train, validation split
+                self.user_train[user] = seq[:-1]
+                self.user_valid[user] = seq[-1]  # Last item
 
         log.info(f"Train sequences: {len(self.user_train)}")
         log.info(f"Valid sequences: {len(self.user_valid)}")
