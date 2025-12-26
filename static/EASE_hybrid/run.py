@@ -133,7 +133,7 @@ def main():
     # ===============================
     if args.sweep:
         # 🔥 로그 스케일 기반 sweep
-        alpha_list = [0.0, 1.0, 3.0, 5.0, 10.0, 20.0, 50.0, 100.0]
+        alpha_list = [25.0, 30.0, 35.0, 40.0, 45.0]
 
         for alpha in alpha_list:
             meta_weights = {
@@ -183,7 +183,7 @@ def main():
     # ===============================
     # 5. Single Run (no sweep)
     # ===============================
-    alpha = 10.0
+    alpha = 35.0
     meta_weights = {
         "genres": alpha,
         "directors": alpha,

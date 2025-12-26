@@ -135,8 +135,17 @@ def train_valid_split_random(df_enc, num_users, min_interactions=5, valid_ratio=
             for it in items:
                 train_rows.append((u, it))
             continue
-        n_valid = max(1, int(len(items) * valid_ratio))
+        n_items = len(items)
+        n_valid = int(n_items * valid_ratio)
+
+        # 🔒 안전장치
+        if n_items <= 1 or n_valid == 0:
+            continue
+
+        n_valid = min(n_valid, n_items - 1)
+
         valid_items = rng.choice(items, size=n_valid, replace=False)
+
         valid_set = set(valid_items)
         for it in items:
             if it in valid_set:
