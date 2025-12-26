@@ -51,7 +51,9 @@ class MultiHeadAttention(nn.Module):
 
         # hidden_units must be divisible by num_heads
         if hidden_units % num_heads != 0:
-            raise ValueError(f"hidden_units ({hidden_units}) must be divisible by num_heads ({num_heads})")
+            raise ValueError(
+                f"hidden_units ({hidden_units}) must be divisible by num_heads ({num_heads})"
+            )
 
         self.head_dim = hidden_units // num_heads
 
@@ -234,10 +236,12 @@ class BERT4Rec(L.LightningModule):
         self.emb_layernorm = nn.LayerNorm(hidden_units, eps=1e-6)
 
         # Transformer blocks
-        self.blocks = nn.ModuleList([
-            BERT4RecBlock(num_heads, hidden_units, dropout_rate)
-            for _ in range(num_layers)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                BERT4RecBlock(num_heads, hidden_units, dropout_rate)
+                for _ in range(num_layers)
+            ]
+        )
 
         # Output layer
         if share_embeddings:
@@ -285,7 +289,11 @@ class BERT4Rec(L.LightningModule):
         seqs = self.item_emb(log_seqs)  # [batch, seq_len, hidden]
 
         # Positional embeddings
-        positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
+        positions = (
+            torch.arange(seq_len, device=self.device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+        )
         seqs += self.pos_emb(positions)
 
         # Dropout + LayerNorm
@@ -303,7 +311,9 @@ class BERT4Rec(L.LightningModule):
         # Output projection
         if self.share_embeddings:
             # Use item embedding weights transposed
-            logits = torch.matmul(seqs, self.item_emb.weight.T)  # [batch, seq_len, num_tokens]
+            logits = torch.matmul(
+                seqs, self.item_emb.weight.T
+            )  # [batch, seq_len, num_tokens]
         else:
             logits = self.out(seqs)
 
@@ -370,7 +380,9 @@ class BERT4Rec(L.LightningModule):
         loss = self.criterion(logits, labels)
 
         # Logging
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
+        )
 
         return loss
 
@@ -414,17 +426,29 @@ class BERT4Rec(L.LightningModule):
                 ndcg_10 += 1 / np.log2(rank + 2)
 
         # Logging
-        self.log('val_hit@10', hit_10 / batch_size, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log('val_ndcg@10', ndcg_10 / batch_size, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "val_hit@10",
+            hit_10 / batch_size,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+        self.log(
+            "val_ndcg@10",
+            ndcg_10 / batch_size,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
 
-        return {'hit@10': hit_10, 'ndcg@10': ndcg_10, 'batch_size': batch_size}
+        return {"hit@10": hit_10, "ndcg@10": ndcg_10, "batch_size": batch_size}
 
     def configure_optimizers(self):
         """Configure optimizer for Lightning"""
         optimizer = torch.optim.Adam(
-            self.parameters(),
-            lr=self.lr,
-            weight_decay=self.weight_decay
+            self.parameters(), lr=self.lr, weight_decay=self.weight_decay
         )
         return optimizer
 
@@ -445,9 +469,11 @@ class BERT4Rec(L.LightningModule):
             # Prepare sequences (add mask token at the end)
             seqs = []
             for seq in user_sequences:
-                masked_seq = (list(seq) + [self.mask_token])[-self.max_len:]
+                masked_seq = (list(seq) + [self.mask_token])[-self.max_len :]
                 if len(masked_seq) < self.max_len:
-                    masked_seq = [self.pad_token] * (self.max_len - len(masked_seq)) + masked_seq
+                    masked_seq = [self.pad_token] * (
+                        self.max_len - len(masked_seq)
+                    ) + masked_seq
                 seqs.append(masked_seq)
 
             seqs = np.array(seqs, dtype=np.int64)
