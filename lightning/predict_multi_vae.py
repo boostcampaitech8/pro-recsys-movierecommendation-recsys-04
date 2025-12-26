@@ -60,6 +60,9 @@ def main(cfg: DictConfig):
         # Find the latest checkpoint in the checkpoint directory
         checkpoint_path = get_latest_checkpoint(checkpoint_dir)
         log.info(f"No checkpoint specified, using: {checkpoint_path}")
+    else:
+        # Expand ~ to home directory
+        checkpoint_path = os.path.expanduser(checkpoint_path)
 
     log.info(f"Loading model from: {checkpoint_path}")
     model = MultiVAE.load_from_checkpoint(

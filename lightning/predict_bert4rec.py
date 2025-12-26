@@ -62,6 +62,9 @@ def main(cfg: DictConfig):
         # Find the latest checkpoint in the checkpoint directory
         checkpoint_path = get_latest_checkpoint(checkpoint_dir)
         log.info(f"No checkpoint specified, using: {checkpoint_path}")
+    else:
+        # Expand ~ to home directory
+        checkpoint_path = os.path.expanduser(checkpoint_path)
 
     log.info(f"Loading model from: {checkpoint_path}")
     model = BERT4Rec.load_from_checkpoint(checkpoint_path)
@@ -117,7 +120,7 @@ def main(cfg: DictConfig):
             batch_seqs.append(full_seq)
             # Exclude ALL already interacted items (train + valid) + look ahead items
             exclude_set = set(full_seq)
-            future_items = future_item_sequences.get(user_idx, [])
+            future_items = future_item_sequences.get(user_idx, set())  # 빈 set으로 통일
             if future_items:
                 exclude_set.update(future_items)
             batch_exclude.append(exclude_set)

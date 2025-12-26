@@ -489,14 +489,14 @@ class BERT4RecDataModule(L.LightningDataModule):
             last_click_year = self.user_last_click_years.get(user_idx)
             if last_click_year is None:
                 # No click year info for this user
-                future_item_sequences[user_idx] = []
+                future_item_sequences[user_idx] = set()  # 빈 set으로 통일
                 continue
 
             # Filter items where release year > last click year
+            # 모든 아이템 중에서 future items 찾기 (full_seq가 아님!)
             future_items = set()
-            for item_idx in full_seq:
-                item_year = self.item_years.get(item_idx)
-                if item_year is not None and item_year > last_click_year:
+            for item_idx, item_year in self.item_years.items():
+                if item_year > last_click_year:
                     future_items.add(item_idx)
 
             future_item_sequences[user_idx] = future_items
