@@ -183,7 +183,7 @@ def main():
     # ===============================
     # 5. Single Run (no sweep)
     # ===============================
-    alpha = 35.0
+    alpha = 40.0
     meta_weights = {
         "genres": alpha,
         "directors": alpha,
