@@ -29,14 +29,8 @@ training:
   kl_max_weight: 0.2
   kl_anneal_steps: 20000
 
-# Trainer 설정
-trainer:
-  devices: "auto"
-  log_every_n_steps: 10
-  val_check_interval: 1.0
-  enable_progress_bar: true
-  enable_model_summary: true
-
-# 추천 설정
-recommend:
-  topk: 10
+# 추론 설정
+inference:
+  checkpoint_path: null              # Path to checkpoint (null = use last.ckpt)
+  topk: 10                           # Number of items to recommend
+  batch_size: 256                    # Inference batch size

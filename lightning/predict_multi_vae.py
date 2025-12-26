@@ -14,6 +14,7 @@ from omegaconf import DictConfig, OmegaConf
 import numpy as np
 import pandas as pd
 import torch
+from datetime import datetime
 
 from src.models.multi_vae import MultiVAE
 from src.data.recsys_data import RecSysDataModule
@@ -46,8 +47,6 @@ def main(cfg: DictConfig):
         data_file=cfg.data.data_file,
         split_strategy=cfg.data.split_strategy,
         temporal_split_ratio=cfg.data.temporal_split_ratio,
-        use_cache=cfg.data_cache.use_cache,
-        cache_dir=cfg.data_cache.cache_dir,
     )
 
     # Setup data
@@ -61,6 +60,9 @@ def main(cfg: DictConfig):
         # Find the latest checkpoint in the checkpoint directory
         checkpoint_path = get_latest_checkpoint(checkpoint_dir)
         log.info(f"No checkpoint specified, using: {checkpoint_path}")
+    else:
+        # Expand ~ to home directory
+        checkpoint_path = os.path.expanduser(checkpoint_path)
 
     log.info(f"Loading model from: {checkpoint_path}")
     model = MultiVAE.load_from_checkpoint(
@@ -80,15 +82,28 @@ def main(cfg: DictConfig):
     batch_size = cfg.inference.batch_size
 
     # Output path: run_dir/submissions/multi_vae_predictions.csv
-    # checkpoint_dir: run_dir/checkpoints
-    # run_dir: checkpoint_dir의 상위 디렉토리
-    run_dir = os.path.dirname(checkpoint_dir)
+    run_dir = os.path.dirname(os.path.dirname(checkpoint_path))
     output_path = os.path.join(
-        run_dir, "submissions", f"multi_vae_predictions_{topk}.csv"
+        run_dir,
+        "submissions",
+        f"multi_vae_predictions_{topk}_{datetime.now():%Y%m%d%H%M%S}.csv",
     )
 
     # Create submissions directory
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # === Get future items for year filtering ===
+    log.info("Getting future item sequences for year filtering...")
+    future_item_sequences = datamodule.get_future_item_sequences()
+
+    # Count how many items will be filtered
+    total_future_items = sum(len(items) for items in future_item_sequences.values())
+    users_with_future = sum(
+        1 for items in future_item_sequences.values() if len(items) > 0
+    )
+    log.info(
+        f"Future items to filter: {total_future_items} items across {users_with_future} users"
+    )
 
     # === Validation Evaluation ===
     log.info(f"Generating Top-{topk} recommendations for validation...")
@@ -100,6 +115,7 @@ def main(cfg: DictConfig):
         k=topk,
         device=device,
         batch_size=batch_size,
+        exclude_items=future_item_sequences,
     )
 
     # Validation Recall@K 계산
@@ -120,6 +136,7 @@ def main(cfg: DictConfig):
         k=topk,
         device=device,
         batch_size=batch_size,
+        exclude_items=future_item_sequences,
     )
 
     # Save predictions

@@ -1,6 +1,6 @@
 # local files that shouldn't be uploaded
 /data
-data/
+# data/  이 폴더는 src 폴더의 data/도 포함하기 때문에 삭제되어야 함
 SASRec/
 
 /baseline
@@ -228,3 +228,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# baseline code about eda
+eda/

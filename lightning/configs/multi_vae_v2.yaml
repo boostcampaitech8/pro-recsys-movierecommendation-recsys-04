@@ -21,13 +21,13 @@ data:
 # 모델 설정
 model:
   hidden_dims: [600, 200]            # Encoder: items→600→200, Decoder: 200→600→items
-  dropout: 0.5                       # 적절한 정규화
+  dropout: 0.5                       # 
 
 # 학습 설정
 training:
   max_epochs: 500
   lr: 1e-3                           # 0.001
-  weight_decay: 0.0                  # L2 regularization (VAE는 KL로 이미 정규화)
+  weight_decay: 0.0                 # 
   kl_max_weight: 0.2                 # KL divergence weight (MultiVAE 논문 기준)
   kl_anneal_steps: 20000             # KL annealing steps (천천히)
 
