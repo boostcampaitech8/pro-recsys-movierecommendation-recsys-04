@@ -190,6 +190,7 @@ class BERT4Rec(L.LightningModule):
         max_len: int = 50,
         dropout_rate: float = 0.3,
         random_mask_prob: float = 0.15,
+        last_item_mask_ratio: float = 0.0,
         lr: float = 0.001,
         weight_decay: float = 0.0,
         share_embeddings: bool = True,
@@ -214,6 +215,7 @@ class BERT4Rec(L.LightningModule):
             max_len: Maximum sequence length
             dropout_rate: Dropout probability
             random_mask_prob: Probability of masking items during random masking (not used in model, kept for compatibility)
+            last_item_mask_ratio: Ratio of samples using last item masking (not used in model, kept for compatibility)
             lr: Learning rate
             weight_decay: Weight decay for optimizer
             share_embeddings: Whether to share item embeddings with output layer
@@ -238,6 +240,7 @@ class BERT4Rec(L.LightningModule):
         self.max_len = max_len
         self.dropout_rate = dropout_rate
         self.random_mask_prob = random_mask_prob
+        self.last_item_mask_ratio = last_item_mask_ratio
         self.lr = lr
         self.weight_decay = weight_decay
         self.share_embeddings = share_embeddings
