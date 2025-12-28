@@ -18,7 +18,18 @@ class BERT4RecDataset(Dataset):
     """
 
     def __init__(
-        self, user_sequences, num_items, max_len, mask_prob, mask_token, pad_token
+        self,
+        user_sequences,
+        num_items,
+        max_len,
+        mask_prob,
+        mask_token,
+        pad_token,
+        item_genres=None,
+        item_directors=None,
+        item_writers=None,
+        item_title_embeddings=None,
+        title_embedding_dim=0,
     ):
         """
         Args:
@@ -28,6 +39,11 @@ class BERT4RecDataset(Dataset):
             mask_prob: Probability of masking items
             mask_token: Token ID for [MASK]
             pad_token: Token ID for padding
+            item_genres: Dict[item_idx, List[genre_idx]] - Item genre mappings
+            item_directors: Dict[item_idx, director_idx] - Item director mappings
+            item_writers: Dict[item_idx, List[writer_idx]] - Item writer mappings
+            item_title_embeddings: Dict[item_idx, np.array] - Pre-computed title embeddings
+            title_embedding_dim: Dimension of title embeddings
         """
         self.user_sequences = user_sequences
         self.num_items = num_items
@@ -35,6 +51,13 @@ class BERT4RecDataset(Dataset):
         self.mask_prob = mask_prob
         self.mask_token = mask_token
         self.pad_token = pad_token
+
+        # Metadata
+        self.item_genres = item_genres or {}
+        self.item_directors = item_directors or {}
+        self.item_writers = item_writers or {}
+        self.item_title_embeddings = item_title_embeddings or {}
+        self.title_embedding_dim = title_embedding_dim
 
         # Get list of users for indexing
         self.users = list(user_sequences.keys())
@@ -47,6 +70,7 @@ class BERT4RecDataset(Dataset):
         Returns:
             tokens: [max_len] - Masked sequence
             labels: [max_len] - Labels for loss (0 for non-masked positions)
+            metadata: Dict with metadata tensors (if available)
         """
         user = self.users[idx]
         seq = self.user_sequences[user]
@@ -64,7 +88,69 @@ class BERT4RecDataset(Dataset):
             tokens = [self.pad_token] * pad_len + tokens
             labels = [self.pad_token] * pad_len + labels
 
-        return torch.LongTensor(tokens), torch.LongTensor(labels)
+        # Prepare metadata
+        metadata = self._prepare_metadata(tokens)
+
+        return torch.LongTensor(tokens), torch.LongTensor(labels), metadata
+
+    def _prepare_metadata(self, tokens):
+        """
+        Prepare metadata tensors for a sequence
+
+        Args:
+            tokens: List[int] - Token sequence (already padded/truncated)
+
+        Returns:
+            Dict with metadata tensors
+        """
+        metadata = {}
+        max_genres = 5  # Maximum number of genres per item
+        max_writers = 5  # Maximum number of writers per item
+
+        # Genres (multi-hot, padded)
+        if self.item_genres:
+            genre_batch = []
+            for item_idx in tokens:
+                if item_idx in self.item_genres:
+                    genres = self.item_genres[item_idx][:max_genres]  # truncate
+                    genres = genres + [0] * (max_genres - len(genres))  # pad
+                else:
+                    genres = [0] * max_genres
+                genre_batch.append(genres)
+            metadata["genres"] = torch.LongTensor(genre_batch)  # [seq_len, max_genres]
+
+        # Directors (single value per item)
+        if self.item_directors:
+            director_batch = [
+                self.item_directors.get(item_idx, 0) for item_idx in tokens
+            ]
+            metadata["directors"] = torch.LongTensor(director_batch)  # [seq_len]
+
+        # Writers (multi-hot, padded)
+        if self.item_writers:
+            writer_batch = []
+            for item_idx in tokens:
+                if item_idx in self.item_writers:
+                    writers = self.item_writers[item_idx][:max_writers]  # truncate
+                    writers = writers + [0] * (max_writers - len(writers))  # pad
+                else:
+                    writers = [0] * max_writers
+                writer_batch.append(writers)
+            metadata["writers"] = torch.LongTensor(writer_batch)  # [seq_len, max_writers]
+
+        # Title embeddings (pre-computed)
+        if self.item_title_embeddings and self.title_embedding_dim > 0:
+            title_batch = []
+            for item_idx in tokens:
+                if item_idx in self.item_title_embeddings:
+                    title_batch.append(self.item_title_embeddings[item_idx])
+                else:
+                    title_batch.append(np.zeros(self.title_embedding_dim))
+            metadata["title_embs"] = torch.FloatTensor(
+                np.array(title_batch)
+            )  # [seq_len, title_dim]
+
+        return metadata
 
     def _mask_sequence(self, seq):
         """
@@ -115,7 +201,18 @@ class BERT4RecValidationDataset(Dataset):
     """
 
     def __init__(
-        self, user_sequences, user_targets, num_items, max_len, mask_token, pad_token
+        self,
+        user_sequences,
+        user_targets,
+        num_items,
+        max_len,
+        mask_token,
+        pad_token,
+        item_genres=None,
+        item_directors=None,
+        item_writers=None,
+        item_title_embeddings=None,
+        title_embedding_dim=0,
     ):
         """
         Args:
@@ -125,6 +222,11 @@ class BERT4RecValidationDataset(Dataset):
             max_len: Maximum sequence length
             mask_token: Token ID for [MASK]
             pad_token: Token ID for padding
+            item_genres: Dict[item_idx, List[genre_idx]] - Item genre mappings
+            item_directors: Dict[item_idx, director_idx] - Item director mappings
+            item_writers: Dict[item_idx, List[writer_idx]] - Item writer mappings
+            item_title_embeddings: Dict[item_idx, np.array] - Pre-computed title embeddings
+            title_embedding_dim: Dimension of title embeddings
         """
         self.user_sequences = user_sequences
         self.user_targets = user_targets
@@ -132,6 +234,13 @@ class BERT4RecValidationDataset(Dataset):
         self.max_len = max_len
         self.mask_token = mask_token
         self.pad_token = pad_token
+
+        # Metadata
+        self.item_genres = item_genres or {}
+        self.item_directors = item_directors or {}
+        self.item_writers = item_writers or {}
+        self.item_title_embeddings = item_title_embeddings or {}
+        self.title_embedding_dim = title_embedding_dim
 
         self.users = list(user_sequences.keys())
 
@@ -143,6 +252,7 @@ class BERT4RecValidationDataset(Dataset):
         Returns:
             tokens: [max_len] - Sequence with [MASK] at the end
             labels: [max_len] - Dummy labels (not used in validation)
+            metadata: Dict with metadata tensors
             target: int - Ground truth item
         """
         user = self.users[idx]
@@ -160,11 +270,73 @@ class BERT4RecValidationDataset(Dataset):
         # Dummy labels (all zeros, not used in validation)
         labels = [self.pad_token] * self.max_len
 
+        # Prepare metadata
+        metadata = self._prepare_metadata(tokens)
+
         return (
             torch.LongTensor(tokens),
             torch.LongTensor(labels),
+            metadata,
             torch.LongTensor([target]),
         )
+
+    def _prepare_metadata(self, tokens):
+        """
+        Prepare metadata tensors for a sequence
+        (Same implementation as BERT4RecDataset)
+
+        Args:
+            tokens: List[int] - Token sequence (already padded/truncated)
+
+        Returns:
+            Dict with metadata tensors
+        """
+        metadata = {}
+        max_genres = 5
+        max_writers = 5
+
+        # Genres
+        if self.item_genres:
+            genre_batch = []
+            for item_idx in tokens:
+                if item_idx in self.item_genres:
+                    genres = self.item_genres[item_idx][:max_genres]
+                    genres = genres + [0] * (max_genres - len(genres))
+                else:
+                    genres = [0] * max_genres
+                genre_batch.append(genres)
+            metadata["genres"] = torch.LongTensor(genre_batch)
+
+        # Directors
+        if self.item_directors:
+            director_batch = [
+                self.item_directors.get(item_idx, 0) for item_idx in tokens
+            ]
+            metadata["directors"] = torch.LongTensor(director_batch)
+
+        # Writers
+        if self.item_writers:
+            writer_batch = []
+            for item_idx in tokens:
+                if item_idx in self.item_writers:
+                    writers = self.item_writers[item_idx][:max_writers]
+                    writers = writers + [0] * (max_writers - len(writers))
+                else:
+                    writers = [0] * max_writers
+                writer_batch.append(writers)
+            metadata["writers"] = torch.LongTensor(writer_batch)
+
+        # Title embeddings
+        if self.item_title_embeddings and self.title_embedding_dim > 0:
+            title_batch = []
+            for item_idx in tokens:
+                if item_idx in self.item_title_embeddings:
+                    title_batch.append(self.item_title_embeddings[item_idx])
+                else:
+                    title_batch.append(np.zeros(self.title_embedding_dim))
+            metadata["title_embs"] = torch.FloatTensor(np.array(title_batch))
+
+        return metadata
 
 
 class BERT4RecDataModule(L.LightningDataModule):
@@ -327,15 +499,23 @@ class BERT4RecDataModule(L.LightningDataModule):
 
     def _load_item_metadata(self, df):
         """
-        Item 메타데이터 로드 (영화 개봉년도)
+        Item 메타데이터 로드 (genres, directors, writers, titles, years)
 
         Args:
             df: Already loaded DataFrame with 'user', 'item', 'time' columns
 
-        Loads item release years and calculates user's last click years
+        Loads item metadata and calculates user's last click years
         Sets:
             - self.item_years: Dict[item_idx, year]
             - self.user_last_click_years: Dict[user_idx, year]
+            - self.item_genres: Dict[item_idx, List[genre_idx]]
+            - self.item_directors: Dict[item_idx, director_idx]
+            - self.item_writers: Dict[item_idx, List[writer_idx]]
+            - self.item_title_embeddings: Dict[item_idx, np.array]
+            - self.num_genres: int
+            - self.num_directors: int
+            - self.num_writers: int
+            - self.title_embedding_dim: int
         """
         # Item release years (indexed) - item_years: Dict[item_idx, year]
         self.item_years = {}
@@ -348,57 +528,251 @@ class BERT4RecDataModule(L.LightningDataModule):
         # Check if years.tsv exists
         if not os.path.exists(years_path):
             log.warning(
-                f"years.tsv not found at {years_path}. Skipping metadata loading."
+                f"years.tsv not found at {years_path}. Skipping years metadata."
             )
-            return
+        else:
+            try:
+                # Load item release years
+                years_df = pd.read_csv(years_path, sep="\t")
+                log.info(f"Loaded {len(years_df)} items with release year info")
 
-        try:
-            # Load item release years
-            years_df = pd.read_csv(years_path, sep="\t")
-            log.info(f"Loaded {len(years_df)} items with release year info")
+                # Create item_years mapping (original_item_id -> year)
+                item_year_map = dict(zip(years_df["item"], years_df["year"]))
 
-            # Create item_years mapping (original_item_id -> year)
-            item_year_map = dict(zip(years_df["item"], years_df["year"]))
+                # Convert to indexed mapping (item_idx -> year)
+                for item_id, year in item_year_map.items():
+                    if item_id in self.item2idx.index:
+                        item_idx = self.item2idx[item_id]
+                        self.item_years[item_idx] = year
 
-            # Convert to indexed mapping (item_idx -> year)
-            for item_id, year in item_year_map.items():
-                if item_id in self.item2idx.index:
-                    item_idx = self.item2idx[item_id]
-                    self.item_years[item_idx] = year
+                log.info(f"Mapped {len(self.item_years)} items to release years")
 
-            log.info(f"Mapped {len(self.item_years)} items to release years")
+                # Calculate user's last click year from interaction data (use already loaded df)
+                if "time" in df.columns:
+                    # Convert timestamp to year
+                    df_copy = df.copy()
+                    df_copy["click_year"] = pd.to_datetime(
+                        df_copy["time"], unit="s"
+                    ).dt.year
 
-            # Calculate user's last click year from interaction data (use already loaded df)
-            if "time" in df.columns:
-                # Convert timestamp to year
-                df_copy = df.copy()
-                df_copy["click_year"] = pd.to_datetime(
-                    df_copy["time"], unit="s"
-                ).dt.year
+                    # Map to user_idx (already done in setup, but just in case)
+                    if "user_idx" not in df_copy.columns:
+                        df_copy["user_idx"] = df_copy["user"].map(self.user2idx)
 
-                # Map to user_idx (already done in setup, but just in case)
-                if "user_idx" not in df_copy.columns:
-                    df_copy["user_idx"] = df_copy["user"].map(self.user2idx)
+                    # Get last click year per user
+                    user_last_years = (
+                        df_copy.groupby("user_idx")["click_year"].max().to_dict()
+                    )
+                    self.user_last_click_years = user_last_years
 
-                # Get last click year per user
-                user_last_years = (
-                    df_copy.groupby("user_idx")["click_year"].max().to_dict()
-                )
-                self.user_last_click_years = user_last_years
+                    log.info(
+                        f"Calculated last click year for {len(self.user_last_click_years)} users"
+                    )
+                else:
+                    log.warning(
+                        "No 'time' column found. Cannot calculate last click years."
+                    )
+
+            except Exception as e:
+                log.error(f"Error loading years metadata: {e}")
+                # Initialize empty dicts on error
+                self.item_years = {}
+                self.user_last_click_years = {}
+
+        # ===== Load Genres Metadata =====
+        self.item_genres = {}
+        self.genre2idx = {}
+        self.num_genres = 1  # 0 is reserved for padding
+
+        genres_path = os.path.join(self.data_dir, "genres.tsv")
+        if os.path.exists(genres_path):
+            try:
+                genres_df = pd.read_csv(genres_path, sep="\t")
+                log.info(f"Loaded {len(genres_df)} genre entries")
+
+                # Build genre vocabulary
+                unique_genres = genres_df["genre"].unique()
+                self.genre2idx = {
+                    genre: idx + 1 for idx, genre in enumerate(unique_genres)
+                }
+                self.num_genres = len(self.genre2idx) + 1  # +1 for padding
+
+                # Build item->genres mapping (1:N relationship)
+                for item_id, group in genres_df.groupby("item"):
+                    if item_id in self.item2idx.index:
+                        item_idx = self.item2idx[item_id]
+                        genre_indices = [
+                            self.genre2idx[g] for g in group["genre"].values
+                        ]
+                        self.item_genres[item_idx] = genre_indices
 
                 log.info(
-                    f"Calculated last click year for {len(self.user_last_click_years)} users"
+                    f"Loaded {self.num_genres-1} unique genres for {len(self.item_genres)} items"
                 )
+            except Exception as e:
+                log.error(f"Error loading genres: {e}")
+                self.item_genres = {}
+                self.genre2idx = {}
+                self.num_genres = 1
+        else:
+            log.warning(f"genres.tsv not found at {genres_path}")
+
+        # ===== Load Directors Metadata =====
+        self.item_directors = {}
+        self.director2idx = {}
+        self.num_directors = 1  # 0 is reserved for padding
+
+        directors_path = os.path.join(self.data_dir, "directors.tsv")
+        if os.path.exists(directors_path):
+            try:
+                directors_df = pd.read_csv(directors_path, sep="\t")
+                log.info(f"Loaded {len(directors_df)} director entries")
+
+                # Build director vocabulary
+                unique_directors = directors_df["director"].unique()
+                self.director2idx = {
+                    d: idx + 1 for idx, d in enumerate(unique_directors)
+                }
+                self.num_directors = len(self.director2idx) + 1
+
+                # Build item->director mapping (1:1 relationship)
+                director_map = dict(
+                    zip(directors_df["item"], directors_df["director"])
+                )
+                for item_id, director_id in director_map.items():
+                    if item_id in self.item2idx.index:
+                        item_idx = self.item2idx[item_id]
+                        self.item_directors[item_idx] = self.director2idx[director_id]
+
+                log.info(
+                    f"Loaded {self.num_directors-1} unique directors for {len(self.item_directors)} items"
+                )
+            except Exception as e:
+                log.error(f"Error loading directors: {e}")
+                self.item_directors = {}
+                self.director2idx = {}
+                self.num_directors = 1
+        else:
+            log.warning(f"directors.tsv not found at {directors_path}")
+
+        # ===== Load Writers Metadata =====
+        self.item_writers = {}
+        self.writer2idx = {}
+        self.num_writers = 1  # 0 is reserved for padding
+
+        writers_path = os.path.join(self.data_dir, "writers.tsv")
+        if os.path.exists(writers_path):
+            try:
+                writers_df = pd.read_csv(writers_path, sep="\t")
+                log.info(f"Loaded {len(writers_df)} writer entries")
+
+                # Build writer vocabulary
+                unique_writers = writers_df["writer"].unique()
+                self.writer2idx = {w: idx + 1 for idx, w in enumerate(unique_writers)}
+                self.num_writers = len(self.writer2idx) + 1
+
+                # Build item->writers mapping (1:N relationship)
+                for item_id, group in writers_df.groupby("item"):
+                    if item_id in self.item2idx.index:
+                        item_idx = self.item2idx[item_id]
+                        writer_indices = [
+                            self.writer2idx[w] for w in group["writer"].values
+                        ]
+                        self.item_writers[item_idx] = writer_indices
+
+                log.info(
+                    f"Loaded {self.num_writers-1} unique writers for {len(self.item_writers)} items"
+                )
+            except Exception as e:
+                log.error(f"Error loading writers: {e}")
+                self.item_writers = {}
+                self.writer2idx = {}
+                self.num_writers = 1
+        else:
+            log.warning(f"writers.tsv not found at {writers_path}")
+
+        # ===== Load Title Embeddings =====
+        self.item_title_embeddings = {}
+        self.title_embedding_dim = 0
+
+        # Try loading from TSV file first (new format from preprocess_title_genre_embeddings.py)
+        title_emb_tsv_path = os.path.join(
+            self.data_dir, "title_embeddings/titles.tsv"
+        )
+
+        if os.path.exists(title_emb_tsv_path):
+            try:
+                log.info(f"Loading title embeddings from {title_emb_tsv_path}")
+                with open(title_emb_tsv_path, 'r') as f:
+                    # Skip header
+                    next(f)
+
+                    for line in f:
+                        parts = line.strip().split('\t')
+                        if len(parts) != 2:
+                            continue
+
+                        item_id = int(parts[0])
+                        emb_values = np.array([float(x) for x in parts[1].split()])
+
+                        # Set embedding dimension from first item
+                        if self.title_embedding_dim == 0:
+                            self.title_embedding_dim = len(emb_values)
+
+                        # Convert to indexed mapping
+                        if item_id in self.item2idx.index:
+                            item_idx = self.item2idx[item_id]
+                            self.item_title_embeddings[item_idx] = emb_values
+
+                log.info(
+                    f"Loaded {len(self.item_title_embeddings)} title embeddings (dim={self.title_embedding_dim})"
+                )
+            except Exception as e:
+                log.error(f"Error loading title embeddings from TSV: {e}")
+                log.warning(
+                    "Title embeddings not found. Run scripts/preprocess_title_genre_embeddings.py first."
+                )
+                self.item_title_embeddings = {}
+                self.title_embedding_dim = 0
+        else:
+            # Fallback: try loading from pickle file (legacy format)
+            title_emb_pkl_path = os.path.join(
+                self.data_dir, "title_embeddings/title_embeddings.pkl"
+            )
+
+            if os.path.exists(title_emb_pkl_path):
+                try:
+                    log.info(f"Loading title embeddings from {title_emb_pkl_path} (legacy pickle format)")
+                    import pickle
+
+                    with open(title_emb_pkl_path, "rb") as f:
+                        title_emb_dict = pickle.load(f)  # {original_item_id: embedding}
+
+                    # Load metadata
+                    metadata_path = os.path.join(
+                        self.data_dir, "title_embeddings/metadata.pkl"
+                    )
+                    with open(metadata_path, "rb") as f:
+                        metadata = pickle.load(f)
+                    self.title_embedding_dim = metadata["embedding_dim"]
+
+                    # Convert to indexed mapping
+                    for item_id, emb in title_emb_dict.items():
+                        if item_id in self.item2idx.index:
+                            item_idx = self.item2idx[item_id]
+                            self.item_title_embeddings[item_idx] = emb
+
+                    log.info(
+                        f"Loaded {len(self.item_title_embeddings)} title embeddings (dim={self.title_embedding_dim})"
+                    )
+                except Exception as e:
+                    log.error(f"Error loading title embeddings from pickle: {e}")
+                    self.item_title_embeddings = {}
+                    self.title_embedding_dim = 0
             else:
                 log.warning(
-                    "No 'time' column found. Cannot calculate last click years."
+                    f"Title embeddings not found. Run scripts/preprocess_title_genre_embeddings.py first."
                 )
-
-        except Exception as e:
-            log.error(f"Error loading item metadata: {e}")
-            # Initialize empty dicts on error
-            self.item_years = {}
-            self.user_last_click_years = {}
 
     def train_dataloader(self):
         """Create training dataloader"""
@@ -409,6 +783,11 @@ class BERT4RecDataModule(L.LightningDataModule):
             mask_prob=self.mask_prob,
             mask_token=self.mask_token,
             pad_token=self.pad_token,
+            item_genres=self.item_genres,
+            item_directors=self.item_directors,
+            item_writers=self.item_writers,
+            item_title_embeddings=self.item_title_embeddings,
+            title_embedding_dim=self.title_embedding_dim,
         )
 
         return DataLoader(
@@ -417,7 +796,21 @@ class BERT4RecDataModule(L.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=True,
+            collate_fn=self._collate_fn_with_metadata,
         )
+
+    def _collate_fn_with_metadata(self, batch):
+        """Custom collate function to handle metadata"""
+        tokens = torch.stack([item[0] for item in batch])
+        labels = torch.stack([item[1] for item in batch])
+
+        # Stack metadata from all samples in batch
+        metadata_keys = batch[0][2].keys()
+        metadata_batch = {}
+        for key in metadata_keys:
+            metadata_batch[key] = torch.stack([item[2][key] for item in batch])
+
+        return tokens, labels, metadata_batch
 
     def val_dataloader(self):
         """Create validation dataloader"""
@@ -428,6 +821,11 @@ class BERT4RecDataModule(L.LightningDataModule):
             max_len=self.max_len,
             mask_token=self.mask_token,
             pad_token=self.pad_token,
+            item_genres=self.item_genres,
+            item_directors=self.item_directors,
+            item_writers=self.item_writers,
+            item_title_embeddings=self.item_title_embeddings,
+            title_embedding_dim=self.title_embedding_dim,
         )
 
         return DataLoader(
@@ -436,7 +834,22 @@ class BERT4RecDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=True,
+            collate_fn=self._collate_fn_val_with_metadata,
         )
+
+    def _collate_fn_val_with_metadata(self, batch):
+        """Custom collate function for validation with metadata"""
+        tokens = torch.stack([item[0] for item in batch])
+        labels = torch.stack([item[1] for item in batch])
+        targets = torch.cat([item[3] for item in batch])  # [batch_size]
+
+        # Stack metadata
+        metadata_keys = batch[0][2].keys()
+        metadata_batch = {}
+        for key in metadata_keys:
+            metadata_batch[key] = torch.stack([item[2][key] for item in batch])
+
+        return tokens, labels, metadata_batch, targets
 
     def get_user_sequence(self, user_id):
         """
@@ -510,3 +923,29 @@ class BERT4RecDataModule(L.LightningDataModule):
             future_item_sequences[user_idx] = future_items
 
         return future_item_sequences
+
+    def get_item_metadata(self):
+        """
+        Get item metadata mappings for inference
+
+        Returns:
+            Dict with metadata mappings or None if no metadata available:
+            {
+                'genres': Dict[item_idx, List[genre_idx]],
+                'directors': Dict[item_idx, director_idx],
+                'writers': Dict[item_idx, List[writer_idx]],
+                'title_embs': Dict[item_idx, np.array]
+            }
+        """
+        metadata = {}
+
+        if self.item_genres:
+            metadata['genres'] = self.item_genres
+        if self.item_directors:
+            metadata['directors'] = self.item_directors
+        if self.item_writers:
+            metadata['writers'] = self.item_writers
+        if self.item_title_embeddings:
+            metadata['title_embs'] = self.item_title_embeddings
+
+        return metadata if metadata else None

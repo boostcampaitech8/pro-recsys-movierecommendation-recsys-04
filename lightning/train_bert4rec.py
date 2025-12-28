@@ -26,7 +26,7 @@ from src.utils import get_directories
 log = logging.getLogger(__name__)
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="bert4rec")
+@hydra.main(version_base=None, config_path="configs", config_name="bert4rec_v2")
 def main(cfg: DictConfig):
     # Hydra의 자동 출력 디렉토리 가져오기
     hydra_cfg = HydraConfig.get()
@@ -74,7 +74,25 @@ def main(cfg: DictConfig):
         lr=cfg.training.lr,
         weight_decay=cfg.training.weight_decay,
         share_embeddings=cfg.model.share_embeddings,
+        # Metadata parameters
+        num_genres=datamodule.num_genres,
+        num_directors=datamodule.num_directors,
+        num_writers=datamodule.num_writers,
+        title_embedding_dim=datamodule.title_embedding_dim,
+        use_genre_emb=cfg.model.use_genre_emb,
+        use_director_emb=cfg.model.use_director_emb,
+        use_writer_emb=cfg.model.use_writer_emb,
+        use_title_emb=cfg.model.use_title_emb,
+        metadata_fusion=cfg.model.metadata_fusion,
+        metadata_dropout=cfg.model.metadata_dropout,
     )
+
+    # Log metadata info
+    log.info(f"Metadata dimensions:")
+    log.info(f"  Genres: {datamodule.num_genres}")
+    log.info(f"  Directors: {datamodule.num_directors}")
+    log.info(f"  Writers: {datamodule.num_writers}")
+    log.info(f"  Title embedding dim: {datamodule.title_embedding_dim}")
 
     # Get checkpoint and TensorBoard directories
     checkpoint_dir, tensorboard_dir = get_directories(cfg, stage="fit")
@@ -86,6 +104,52 @@ def main(cfg: DictConfig):
         save_dir=tensorboard_dir,
         name="",  # 이미 경로에 포함되어 있으므로 빈 문자열
     )
+
+    # Log hyperparameters to TensorBoard
+    hparams = {
+        # Data
+        "data/batch_size": cfg.data.batch_size,
+        "data/min_interactions": cfg.data.min_interactions,
+        "data/seed": cfg.data.seed,
+        "data/use_full_data": cfg.data.use_full_data,
+        # Model
+        "model/hidden_units": cfg.model.hidden_units,
+        "model/num_heads": cfg.model.num_heads,
+        "model/num_layers": cfg.model.num_layers,
+        "model/max_len": cfg.model.max_len,
+        "model/dropout_rate": cfg.model.dropout_rate,
+        "model/mask_prob": cfg.model.mask_prob,
+        "model/share_embeddings": cfg.model.share_embeddings,
+        "model/use_genre_emb": cfg.model.use_genre_emb,
+        "model/use_director_emb": cfg.model.use_director_emb,
+        "model/use_writer_emb": cfg.model.use_writer_emb,
+        "model/use_title_emb": cfg.model.use_title_emb,
+        "model/metadata_fusion": cfg.model.metadata_fusion,
+        "model/metadata_dropout": cfg.model.metadata_dropout,
+        # Training
+        "training/num_epochs": cfg.training.num_epochs,
+        "training/lr": cfg.training.lr,
+        "training/weight_decay": cfg.training.weight_decay,
+        "training/gradient_clip_val": cfg.training.gradient_clip_val,
+        "training/precision": cfg.training.precision,
+        "training/early_stopping": cfg.training.early_stopping,
+        "training/early_stopping_patience": cfg.training.early_stopping_patience,
+        # Metadata dimensions (data-dependent)
+        "metadata/num_genres": datamodule.num_genres,
+        "metadata/num_directors": datamodule.num_directors,
+        "metadata/num_writers": datamodule.num_writers,
+        "metadata/title_embedding_dim": datamodule.title_embedding_dim,
+        "metadata/num_items": datamodule.num_items,
+        "metadata/num_users": datamodule.num_users,
+    }
+
+    # Define metrics to track in HPARAMS (required for TensorBoard HPARAMS tab)
+    metrics = {
+        "hp_metric": 0,  # Placeholder, will be updated during training
+    }
+
+    # Log both hparams and metrics for TensorBoard HPARAMS plugin
+    logger.log_hyperparams(hparams, metrics)
 
     # Callbacks
     callbacks = []
@@ -167,6 +231,14 @@ def main(cfg: DictConfig):
     log.info(
         f"Best {cfg.training.monitor_metric}: {checkpoint_callback.best_model_score:.4f}"
     )
+
+    # Print final gate values if using gate fusion
+    if hasattr(model, '_final_gate_values'):
+        feature_names, avg_gates = model._final_gate_values
+        gate_str = " | ".join(
+            [f"{name}: {avg_gates[i].item():.4f}" for i, name in enumerate(feature_names)]
+        )
+        log.info(f"Final Gate values: {gate_str}")
 
 
 if __name__ == "__main__":
