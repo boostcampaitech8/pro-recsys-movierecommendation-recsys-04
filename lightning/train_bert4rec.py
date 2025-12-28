@@ -49,7 +49,8 @@ def main(cfg: DictConfig):
         data_file=cfg.data.data_file,
         batch_size=cfg.data.batch_size,
         max_len=cfg.model.max_len,
-        mask_prob=cfg.model.mask_prob,
+        random_mask_prob=cfg.model.random_mask_prob,
+        last_item_mask_ratio=cfg.model.last_item_mask_ratio,
         min_interactions=cfg.data.min_interactions,
         seed=cfg.data.seed,
         num_workers=cfg.data.num_workers,
@@ -70,7 +71,7 @@ def main(cfg: DictConfig):
         num_layers=cfg.model.num_layers,
         max_len=cfg.model.max_len,
         dropout_rate=cfg.model.dropout_rate,
-        mask_prob=cfg.model.mask_prob,
+        random_mask_prob=cfg.model.random_mask_prob,
         lr=cfg.training.lr,
         weight_decay=cfg.training.weight_decay,
         share_embeddings=cfg.model.share_embeddings,
@@ -118,7 +119,8 @@ def main(cfg: DictConfig):
         "model/num_layers": cfg.model.num_layers,
         "model/max_len": cfg.model.max_len,
         "model/dropout_rate": cfg.model.dropout_rate,
-        "model/mask_prob": cfg.model.mask_prob,
+        "model/random_mask_prob": cfg.model.random_mask_prob,
+        "model/last_item_mask_ratio": cfg.model.last_item_mask_ratio,
         "model/share_embeddings": cfg.model.share_embeddings,
         "model/use_genre_emb": cfg.model.use_genre_emb,
         "model/use_director_emb": cfg.model.use_director_emb,
@@ -144,8 +146,12 @@ def main(cfg: DictConfig):
     }
 
     # Define metrics to track in HPARAMS (required for TensorBoard HPARAMS tab)
+    # 실제 학습 중 로깅되는 metric 이름과 동일하게 설정
     metrics = {
-        "hp_metric": 0,  # Placeholder, will be updated during training
+        "val/recall@5": 0.0,
+        "val/recall@10": 0.0,
+        "val/ndcg@5": 0.0,
+        "val/ndcg@10": 0.0,
     }
 
     # Log both hparams and metrics for TensorBoard HPARAMS plugin

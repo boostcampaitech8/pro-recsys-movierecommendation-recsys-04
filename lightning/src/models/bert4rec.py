@@ -175,7 +175,7 @@ class BERT4Rec(L.LightningModule):
             num_layers: 3
             max_len: 50
             dropout_rate: 0.3
-            mask_prob: 0.15
+            random_mask_prob: 0.15
         training:
             lr: 0.001
             weight_decay: 0.0
@@ -189,7 +189,7 @@ class BERT4Rec(L.LightningModule):
         num_layers: int = 3,
         max_len: int = 50,
         dropout_rate: float = 0.3,
-        mask_prob: float = 0.15,
+        random_mask_prob: float = 0.15,
         lr: float = 0.001,
         weight_decay: float = 0.0,
         share_embeddings: bool = True,
@@ -213,7 +213,7 @@ class BERT4Rec(L.LightningModule):
             num_layers: Number of transformer blocks
             max_len: Maximum sequence length
             dropout_rate: Dropout probability
-            mask_prob: Probability of masking items during training
+            random_mask_prob: Probability of masking items during random masking (not used in model, kept for compatibility)
             lr: Learning rate
             weight_decay: Weight decay for optimizer
             share_embeddings: Whether to share item embeddings with output layer
@@ -237,7 +237,7 @@ class BERT4Rec(L.LightningModule):
         self.num_layers = num_layers
         self.max_len = max_len
         self.dropout_rate = dropout_rate
-        self.mask_prob = mask_prob
+        self.random_mask_prob = random_mask_prob
         self.lr = lr
         self.weight_decay = weight_decay
         self.share_embeddings = share_embeddings
@@ -487,44 +487,6 @@ class BERT4Rec(L.LightningModule):
         if return_gate_values and gate_values is not None:
             return logits, gate_values
         return logits
-
-    def mask_sequence(self, seq):
-        """
-        Apply BERT-style masking to a sequence
-
-        Args:
-            seq: [seq_len] - Original sequence
-        Returns:
-            tokens: [seq_len] - Masked sequence
-            labels: [seq_len] - Labels (0 for non-masked, original item for masked)
-        """
-        tokens = []
-        labels = []
-
-        for item in seq:
-            prob = np.random.random()
-
-            if prob < self.mask_prob:
-                # Masked position
-                prob /= self.mask_prob
-
-                if prob < 0.8:
-                    # 80%: Replace with [MASK]
-                    tokens.append(self.mask_token)
-                elif prob < 0.9:
-                    # 10%: Replace with random item
-                    tokens.append(np.random.randint(1, self.num_items + 1))
-                else:
-                    # 10%: Keep original
-                    tokens.append(item)
-
-                labels.append(item)  # Original item as label
-            else:
-                # Not masked
-                tokens.append(item)
-                labels.append(self.pad_token)  # Ignore in loss
-
-        return tokens, labels
 
     def training_step(self, batch, batch_idx):
         """

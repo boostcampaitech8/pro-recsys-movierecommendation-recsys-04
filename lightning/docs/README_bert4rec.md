@@ -106,13 +106,14 @@ data:
 
 ```yaml
 model:
-  hidden_units: 256       # Hidden dimension (논문: dataset-dependent)
-  num_heads: 4            # Attention heads 수 (논문: dataset-dependent)
-  num_layers: 2           # Transformer blocks 수 (논문: 2 for most datasets)
-  max_len: 200            # 최대 시퀀스 길이 (논문: 200 for ML-1M)
-  dropout_rate: 0.2       # Dropout 확률 (논문: 0.2~0.5)
-  mask_prob: 0.2          # Masking 확률 (논문: 0.15, BERT와 동일)
-  share_embeddings: true  # Output layer와 embedding 공유 (논문: Yes)
+  hidden_units: 256            # Hidden dimension (논문: dataset-dependent)
+  num_heads: 4                 # Attention heads 수 (논문: dataset-dependent)
+  num_layers: 2                # Transformer blocks 수 (논문: 2 for most datasets)
+  max_len: 200                 # 최대 시퀀스 길이 (논문: 200 for ML-1M)
+  dropout_rate: 0.2            # Dropout 확률 (논문: 0.2~0.5)
+  random_mask_prob: 0.2        # 랜덤 마스킹 확률 (논문: 0.15, BERT와 동일)
+  last_item_mask_ratio: 0.1    # 마지막 아이템만 마스킹하는 샘플 비율 (논문 권장)
+  share_embeddings: true       # Output layer와 embedding 공유 (논문: Yes)
 
   # 메타데이터 설정 (확장 기능)
   use_genre_emb: false      # 장르 임베딩 사용
@@ -754,10 +755,40 @@ where W₁: hidden → 4*hidden
 
 ### Masking Strategy (논문 Section 3.2)
 
-학습 시 각 아이템은 **15% 확률**로 마스킹:
+학습 시 두 가지 마스킹 전략을 혼합하여 사용합니다:
+
+#### 1. Random Masking (기본 전략)
+
+각 아이템은 **`random_mask_prob` 확률**로 랜덤하게 마스킹:
 - **80%**: `[MASK]` 토큰으로 대체
 - **10%**: 랜덤 아이템으로 대체
 - **10%**: 원본 유지
+
+#### 2. Last Item Masking (추가 전략)
+
+**`last_item_mask_ratio` 비율**의 샘플에서는 마지막 아이템만 마스킹:
+- 시퀀스의 마지막 아이템만 `[MASK]` 토큰으로 대체
+- 추론 시나리오와 동일한 패턴으로 학습
+- 다음 아이템 예측 성능 향상
+
+**설정 예시** ([bert4rec_v2.yaml](../configs/bert4rec_v2.yaml)):
+```yaml
+model:
+  random_mask_prob: 0.2        # 랜덤 마스킹 확률
+  last_item_mask_ratio: 0.1    # 마지막 아이템만 마스킹하는 샘플 비율
+```
+
+**동작 방식**:
+```
+전체 배치 100개 샘플이 있다면:
+- 10개 샘플 (10%): 마지막 아이템만 마스킹
+- 90개 샘플 (90%): 랜덤 마스킹 (20% 확률로 각 아이템)
+```
+
+**장점**:
+- 추론 시와 동일한 마스킹 패턴으로 학습하여 성능 향상
+- 시퀀스의 마지막 아이템 예측에 특화
+- 논문에서 권장하는 기법
 
 추론 시:
 - 마지막 위치에 `[MASK]` 추가
