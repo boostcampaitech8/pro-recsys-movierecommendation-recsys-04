@@ -27,7 +27,7 @@ from src.utils.metrics import recall_at_k
 log = logging.getLogger(__name__)
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="bert4rec")
+@hydra.main(version_base=None, config_path="configs", config_name="bert4rec_v2")
 def main(cfg: DictConfig):
     # Get checkpoint and TensorBoard directories (최근 실행 디렉토리)
     checkpoint_dir, tensorboard_dir = get_directories(cfg, stage="predict")
@@ -104,6 +104,13 @@ def main(cfg: DictConfig):
     # Future items per user
     future_item_sequences = datamodule.get_future_item_sequences()
 
+    # Get item metadata for inference
+    item_metadata = datamodule.get_item_metadata()
+    if item_metadata is not None:
+        log.info("Using metadata for inference")
+    else:
+        log.info("No metadata available, using item IDs only")
+
     # Process in batches
     for start_idx in tqdm(range(0, len(user_indices), batch_size), desc="Inference"):
         end_idx = min(start_idx + batch_size, len(user_indices))
@@ -125,10 +132,13 @@ def main(cfg: DictConfig):
                 exclude_set.update(future_items)
             batch_exclude.append(exclude_set)
 
-        # Get predictions
+        # Get predictions with metadata
         with torch.no_grad():
             top_items = model.predict(
-                user_sequences=batch_seqs, topk=topk, exclude_items=batch_exclude
+                user_sequences=batch_seqs,
+                topk=topk,
+                exclude_items=batch_exclude,
+                item_metadata=item_metadata
             )
 
         # Convert to original IDs and save
