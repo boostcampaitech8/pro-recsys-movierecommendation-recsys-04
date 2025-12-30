@@ -68,6 +68,12 @@ class BERT4RecDataset(Dataset):
         self.item_title_embeddings = item_title_embeddings or {}
         self.title_embedding_dim = title_embedding_dim
 
+        # Check if any metadata is actually enabled
+        self.has_metadata = bool(
+            self.item_genres or self.item_directors or
+            self.item_writers or self.item_title_embeddings
+        )
+
         # Get list of users for indexing
         self.users = list(user_sequences.keys())
 
@@ -107,8 +113,8 @@ class BERT4RecDataset(Dataset):
             tokens = [self.pad_token] * pad_len + tokens
             labels = [self.pad_token] * pad_len + labels
 
-        # Prepare metadata
-        metadata = self._prepare_metadata(tokens)
+        # Prepare metadata only if enabled
+        metadata = self._prepare_metadata(tokens) if self.has_metadata else {}
 
         return torch.LongTensor(tokens), torch.LongTensor(labels), metadata
 
@@ -146,10 +152,7 @@ class BERT4RecDataset(Dataset):
 
         # Sample indices without replacement
         sampled_indices = np.random.choice(
-            seq_len,
-            size=self.max_len,
-            replace=False,
-            p=probabilities
+            seq_len, size=self.max_len, replace=False, p=probabilities
         )
 
         # Sort indices to maintain original order
@@ -203,7 +206,9 @@ class BERT4RecDataset(Dataset):
                 else:
                     writers = [0] * max_writers
                 writer_batch.append(writers)
-            metadata["writers"] = torch.LongTensor(writer_batch)  # [seq_len, max_writers]
+            metadata["writers"] = torch.LongTensor(
+                writer_batch
+            )  # [seq_len, max_writers]
 
         # Title embeddings (pre-computed)
         if self.item_title_embeddings and self.title_embedding_dim > 0:
@@ -332,6 +337,12 @@ class BERT4RecValidationDataset(Dataset):
         self.item_title_embeddings = item_title_embeddings or {}
         self.title_embedding_dim = title_embedding_dim
 
+        # Check if any metadata is actually enabled
+        self.has_metadata = bool(
+            self.item_genres or self.item_directors or
+            self.item_writers or self.item_title_embeddings
+        )
+
         self.users = list(user_sequences.keys())
 
     def __len__(self):
@@ -360,8 +371,8 @@ class BERT4RecValidationDataset(Dataset):
         # Dummy labels (all zeros, not used in validation)
         labels = [self.pad_token] * self.max_len
 
-        # Prepare metadata
-        metadata = self._prepare_metadata(tokens)
+        # Prepare metadata only if enabled
+        metadata = self._prepare_metadata(tokens) if self.has_metadata else {}
 
         return (
             torch.LongTensor(tokens),
@@ -732,9 +743,7 @@ class BERT4RecDataModule(L.LightningDataModule):
                 self.num_directors = len(self.director2idx) + 1
 
                 # Build item->director mapping (1:1 relationship)
-                director_map = dict(
-                    zip(directors_df["item"], directors_df["director"])
-                )
+                director_map = dict(zip(directors_df["item"], directors_df["director"]))
                 for item_id, director_id in director_map.items():
                     if item_id in self.item2idx.index:
                         item_idx = self.item2idx[item_id]
@@ -792,19 +801,17 @@ class BERT4RecDataModule(L.LightningDataModule):
         self.title_embedding_dim = 0
 
         # Try loading from TSV file first (new format from preprocess_title_genre_embeddings.py)
-        title_emb_tsv_path = os.path.join(
-            self.data_dir, "title_embeddings/titles.tsv"
-        )
+        title_emb_tsv_path = os.path.join(self.data_dir, "title_embeddings/titles.tsv")
 
         if os.path.exists(title_emb_tsv_path):
             try:
                 log.info(f"Loading title embeddings from {title_emb_tsv_path}")
-                with open(title_emb_tsv_path, 'r') as f:
+                with open(title_emb_tsv_path, "r") as f:
                     # Skip header
                     next(f)
 
                     for line in f:
-                        parts = line.strip().split('\t')
+                        parts = line.strip().split("\t")
                         if len(parts) != 2:
                             continue
 
@@ -838,7 +845,9 @@ class BERT4RecDataModule(L.LightningDataModule):
 
             if os.path.exists(title_emb_pkl_path):
                 try:
-                    log.info(f"Loading title embeddings from {title_emb_pkl_path} (legacy pickle format)")
+                    log.info(
+                        f"Loading title embeddings from {title_emb_pkl_path} (legacy pickle format)"
+                    )
                     import pickle
 
                     with open(title_emb_pkl_path, "rb") as f:
@@ -894,6 +903,8 @@ class BERT4RecDataModule(L.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=True,
+            persistent_workers=True,  # 속도 향상
+            prefetch_factor=2,  # 속도 향상
             collate_fn=self._collate_fn_with_metadata,
         )
 
@@ -902,11 +913,12 @@ class BERT4RecDataModule(L.LightningDataModule):
         tokens = torch.stack([item[0] for item in batch])
         labels = torch.stack([item[1] for item in batch])
 
-        # Stack metadata from all samples in batch
-        metadata_keys = batch[0][2].keys()
+        # Stack metadata from all samples in batch (skip if empty)
         metadata_batch = {}
-        for key in metadata_keys:
-            metadata_batch[key] = torch.stack([item[2][key] for item in batch])
+        if batch[0][2]:  # Check if metadata dict is not empty
+            metadata_keys = batch[0][2].keys()
+            for key in metadata_keys:
+                metadata_batch[key] = torch.stack([item[2][key] for item in batch])
 
         return tokens, labels, metadata_batch
 
@@ -932,6 +944,8 @@ class BERT4RecDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=True,
+            persistent_workers=True,  # 속도 향상
+            prefetch_factor=2,        # 속도 향상
             collate_fn=self._collate_fn_val_with_metadata,
         )
 
@@ -941,11 +955,12 @@ class BERT4RecDataModule(L.LightningDataModule):
         labels = torch.stack([item[1] for item in batch])
         targets = torch.cat([item[3] for item in batch])  # [batch_size]
 
-        # Stack metadata
-        metadata_keys = batch[0][2].keys()
+        # Stack metadata (skip if empty)
         metadata_batch = {}
-        for key in metadata_keys:
-            metadata_batch[key] = torch.stack([item[2][key] for item in batch])
+        if batch[0][2]:  # Check if metadata dict is not empty
+            metadata_keys = batch[0][2].keys()
+            for key in metadata_keys:
+                metadata_batch[key] = torch.stack([item[2][key] for item in batch])
 
         return tokens, labels, metadata_batch, targets
 
@@ -1038,12 +1053,12 @@ class BERT4RecDataModule(L.LightningDataModule):
         metadata = {}
 
         if self.item_genres:
-            metadata['genres'] = self.item_genres
+            metadata["genres"] = self.item_genres
         if self.item_directors:
-            metadata['directors'] = self.item_directors
+            metadata["directors"] = self.item_directors
         if self.item_writers:
-            metadata['writers'] = self.item_writers
+            metadata["writers"] = self.item_writers
         if self.item_title_embeddings:
-            metadata['title_embs'] = self.item_title_embeddings
+            metadata["title_embs"] = self.item_title_embeddings
 
         return metadata if metadata else None
