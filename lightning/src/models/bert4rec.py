@@ -667,8 +667,8 @@ class BERT4Rec(L.LightningModule):
         max_writers = 5
 
         # Genres (multi-hot, padded)
-        if 'genres' in item_metadata:
-            item_genres = item_metadata['genres']
+        if "genres" in item_metadata:
+            item_genres = item_metadata["genres"]
             genre_batch = []
             for seq in seqs:
                 seq_genres = []
@@ -680,20 +680,26 @@ class BERT4Rec(L.LightningModule):
                         genres = [0] * max_genres
                     seq_genres.append(genres)
                 genre_batch.append(seq_genres)
-            metadata["genres"] = torch.LongTensor(genre_batch).to(self.device)  # [batch, seq_len, max_genres]
+            metadata["genres"] = torch.LongTensor(genre_batch).to(
+                self.device
+            )  # [batch, seq_len, max_genres]
 
         # Directors (single value per item)
-        if 'directors' in item_metadata:
-            item_directors = item_metadata['directors']
+        if "directors" in item_metadata:
+            item_directors = item_metadata["directors"]
             director_batch = []
             for seq in seqs:
-                seq_directors = [item_directors.get(int(item_idx), 0) for item_idx in seq]
+                seq_directors = [
+                    item_directors.get(int(item_idx), 0) for item_idx in seq
+                ]
                 director_batch.append(seq_directors)
-            metadata["directors"] = torch.LongTensor(director_batch).to(self.device)  # [batch, seq_len]
+            metadata["directors"] = torch.LongTensor(director_batch).to(
+                self.device
+            )  # [batch, seq_len]
 
         # Writers (multi-hot, padded)
-        if 'writers' in item_metadata:
-            item_writers = item_metadata['writers']
+        if "writers" in item_metadata:
+            item_writers = item_metadata["writers"]
             writer_batch = []
             for seq in seqs:
                 seq_writers = []
@@ -705,11 +711,13 @@ class BERT4Rec(L.LightningModule):
                         writers = [0] * max_writers
                     seq_writers.append(writers)
                 writer_batch.append(seq_writers)
-            metadata["writers"] = torch.LongTensor(writer_batch).to(self.device)  # [batch, seq_len, max_writers]
+            metadata["writers"] = torch.LongTensor(writer_batch).to(
+                self.device
+            )  # [batch, seq_len, max_writers]
 
         # Title embeddings (pre-computed)
-        if 'title_embs' in item_metadata:
-            item_title_embs = item_metadata['title_embs']
+        if "title_embs" in item_metadata:
+            item_title_embs = item_metadata["title_embs"]
             # Get embedding dimension from first available embedding
             title_dim = None
             for emb in item_title_embs.values():
@@ -726,7 +734,9 @@ class BERT4Rec(L.LightningModule):
                         else:
                             seq_titles.append(np.zeros(title_dim))
                     title_batch.append(seq_titles)
-                metadata["title_embs"] = torch.FloatTensor(np.array(title_batch)).to(self.device)  # [batch, seq_len, title_dim]
+                metadata["title_embs"] = torch.FloatTensor(np.array(title_batch)).to(
+                    self.device
+                )  # [batch, seq_len, title_dim]
 
         return metadata
 

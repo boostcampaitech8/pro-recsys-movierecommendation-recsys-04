@@ -189,20 +189,30 @@ def main(cfg: DictConfig):
 
     callbacks.append(checkpoint_callback)
 
-    # EarlyStopping: Stop training if validation metric doesn't improve
-    # Disable early stopping when using full data (no validation)
-    use_full_data = cfg.data.use_full_data
-    if cfg.training.early_stopping and not use_full_data:
-        early_stopping = EarlyStopping(
-            monitor=cfg.checkpoint.monitor,
-            patience=cfg.training.early_stopping_patience,
-            mode=cfg.checkpoint.mode,
-            verbose=True,
-        )
-        callbacks.append(early_stopping)
-        log.info("Early stopping enabled")
-    elif use_full_data:
-        log.info("Early stopping disabled (use_full_data=True)")
+    # EarlyStopping: Stop training if metric doesn't improve
+    if cfg.training.early_stopping:
+        if use_full_data:
+            # Full data mode: monitor train_loss
+            early_stopping = EarlyStopping(
+                monitor="train_loss",
+                patience=cfg.training.early_stopping_patience,
+                mode="min",
+                verbose=True,
+            )
+            callbacks.append(early_stopping)
+            log.info("Early stopping enabled (monitoring train_loss for full data mode)")
+        else:
+            # Standard mode: monitor validation metric
+            early_stopping = EarlyStopping(
+                monitor=cfg.checkpoint.monitor,
+                patience=cfg.training.early_stopping_patience,
+                mode=cfg.checkpoint.mode,
+                verbose=True,
+            )
+            callbacks.append(early_stopping)
+            log.info(f"Early stopping enabled (monitoring {cfg.checkpoint.monitor})")
+    else:
+        log.info("Early stopping disabled")
 
     # LearningRateMonitor: Log learning rate
     lr_monitor = LearningRateMonitor(logging_interval="epoch")

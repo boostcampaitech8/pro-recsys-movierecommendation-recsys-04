@@ -378,10 +378,10 @@ class TestBERT4RecDataModuleEdgeCases:
 
 @pytest.mark.unit
 class TestLastItemMasking:
-    """Test last_item_mask_ratio functionality"""
+    """Test last_item_mask_ratio functionality (boost strategy)"""
 
     def test_last_item_mask_ratio_zero(self, temp_data_dir):
-        """Test that last_item_mask_ratio=0.0 disables last item masking"""
+        """Test that last_item_mask_ratio=0.0 disables last item boost masking"""
         dm = BERT4RecDataModule(
             data_dir=temp_data_dir,
             data_file="train_ratings.csv",
@@ -402,18 +402,18 @@ class TestLastItemMasking:
             pad_token=0,
         )
 
-        # With ratio=0.0, should use random masking only
+        # With ratio=0.0, should use random masking only (no last-item boost)
         assert dataset.last_item_mask_ratio == 0.0
 
     def test_last_item_mask_ratio_full(self, temp_data_dir):
-        """Test that last_item_mask_ratio=1.0 enables last item masking for all samples"""
+        """Test that last_item_mask_ratio=1.0 always boosts last item masking on top of random masking"""
         dm = BERT4RecDataModule(
             data_dir=temp_data_dir,
             data_file="train_ratings.csv",
             batch_size=2,
             max_len=10,
-            random_mask_prob=0.0,  # Disable random masking
-            last_item_mask_ratio=1.0,  # Enable last item masking for all
+            random_mask_prob=0.0,  # Disable random masking for clearer test
+            last_item_mask_ratio=1.0,  # Always boost last item
         )
         dm.setup()
 
@@ -427,18 +427,18 @@ class TestLastItemMasking:
             pad_token=0,
         )
 
-        # With ratio=1.0, all samples should use last item masking
+        # With ratio=1.0, all samples should additionally mask last item
         assert dataset.last_item_mask_ratio == 1.0
 
     def test_last_item_mask_ratio_partial(self, temp_data_dir):
-        """Test that last_item_mask_ratio=0.5 creates mixed masking"""
+        """Test that last_item_mask_ratio=0.5 boosts last item masking with 50% probability"""
         dm = BERT4RecDataModule(
             data_dir=temp_data_dir,
             data_file="train_ratings.csv",
             batch_size=100,  # Large batch to test distribution
             max_len=10,
-            random_mask_prob=0.2,
-            last_item_mask_ratio=0.5,
+            random_mask_prob=0.2,  # Random masking always applied
+            last_item_mask_ratio=0.5,  # 50% probability to boost last item
         )
         dm.setup()
 
@@ -452,17 +452,18 @@ class TestLastItemMasking:
             pad_token=0,
         )
 
+        # All samples get random masking + 50% get additional last-item boost
         assert dataset.last_item_mask_ratio == 0.5
 
     def test_last_item_mask_creates_mask_at_last_position(self, temp_data_dir):
-        """Test that last item masking actually masks the last position"""
+        """Test that last item boost masking actually masks the last position"""
         dm = BERT4RecDataModule(
             data_dir=temp_data_dir,
             data_file="train_ratings.csv",
             batch_size=2,
             max_len=10,
-            random_mask_prob=0.0,  # Disable random masking
-            last_item_mask_ratio=1.0,  # Always use last item masking
+            random_mask_prob=0.0,  # Disable random masking for clearer test
+            last_item_mask_ratio=1.0,  # Always boost last item masking
         )
         dm.setup()
 
@@ -485,6 +486,7 @@ class TestLastItemMasking:
             if non_pad_mask.any():
                 last_pos = non_pad_mask.nonzero(as_tuple=True)[0][-1].item()
 
+                # With ratio=1.0 and random_mask_prob=0.0, last position should always be masked
                 # The last position should have a non-zero label (indicating it was masked)
                 # Note: label=0 means "don't compute loss", non-zero means "predict this item"
                 assert labels[last_pos] != 0, f"Last position {last_pos} should be masked"

@@ -40,7 +40,8 @@ class BERT4RecDataset(Dataset):
             random_mask_prob: Probability of masking items (for random masking)
             mask_token: Token ID for [MASK]
             pad_token: Token ID for padding
-            last_item_mask_ratio: Ratio of samples that mask only the last item (default: 0.2)
+            last_item_mask_ratio: Probability of additionally masking the last item on top of random masking (default: 0.2)
+                                  This boosts next-item prediction while maintaining data diversity
             item_genres: Dict[item_idx, List[genre_idx]] - Item genre mappings
             item_directors: Dict[item_idx, director_idx] - Item director mappings
             item_writers: Dict[item_idx, List[writer_idx]] - Item writer mappings
@@ -78,13 +79,16 @@ class BERT4RecDataset(Dataset):
         user = self.users[idx]
         seq = self.user_sequences[user]
 
-        # Decide masking strategy based on last_item_mask_ratio
-        if np.random.random() < self.last_item_mask_ratio:
-            # Mask only the last item (like validation/inference)
-            tokens, labels = self._mask_last_item(seq)
-        else:
-            # Apply random masking (BERT-style)
-            tokens, labels = self._random_mask_sequence(seq)
+        # Always apply random masking first (for data diversity)
+        tokens, labels = self._random_mask_sequence(seq)
+
+        # Additionally mask the last item with probability last_item_mask_ratio
+        # This boosts next-item prediction performance while maintaining data diversity
+        if len(seq) > 0 and np.random.random() < self.last_item_mask_ratio:
+            # Force mask the last item (overwrite if already masked)
+            last_idx = len(seq) - 1
+            tokens[last_idx] = self.mask_token
+            labels[last_idx] = seq[last_idx]  # Original item as label
 
         # Truncate or pad
         tokens = tokens[-self.max_len :]
