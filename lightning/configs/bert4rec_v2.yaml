@@ -18,6 +18,11 @@ data:
   num_workers: 4               # CPU 코어 최적화
   use_full_data: false          # true: 전체데이터사용/val_check사용안함/earlystop 사용안함, false: train/validation split
 
+  # Sequence Sampling Strategy (시퀀스 max_len 초과 시 샘플링 방법)
+  # - "recent": 최근 max_len개 아이템 선택 (BERT4Rec 기본값)
+  # - "weighted": 선형 가중치 샘플링 (1,2,3,...,seq_len 확률로 최신 아이템 선호, 순서 유지, 중복 없음)
+  sampling_strategy: "recent"
+
 # 모델 설정 - 논문 기준으로 증가
 model:
   hidden_units: 256            # 증가 (초기: 64, 논문: 256)

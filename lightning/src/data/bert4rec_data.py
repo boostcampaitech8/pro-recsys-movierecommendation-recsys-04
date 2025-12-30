@@ -26,6 +26,7 @@ class BERT4RecDataset(Dataset):
         mask_token,
         pad_token,
         last_item_mask_ratio=0.2,
+        sampling_strategy="recent",
         item_genres=None,
         item_directors=None,
         item_writers=None,
@@ -42,6 +43,9 @@ class BERT4RecDataset(Dataset):
             pad_token: Token ID for padding
             last_item_mask_ratio: Probability of additionally masking the last item on top of random masking (default: 0.2)
                                   This boosts next-item prediction while maintaining data diversity
+            sampling_strategy: Strategy for truncating sequences ("recent" or "weighted")
+                - "recent": Take the most recent max_len items (default)
+                - "weighted": Sample max_len items using recency-weighted probabilities
             item_genres: Dict[item_idx, List[genre_idx]] - Item genre mappings
             item_directors: Dict[item_idx, director_idx] - Item director mappings
             item_writers: Dict[item_idx, List[writer_idx]] - Item writer mappings
@@ -55,6 +59,7 @@ class BERT4RecDataset(Dataset):
         self.mask_token = mask_token
         self.pad_token = pad_token
         self.last_item_mask_ratio = last_item_mask_ratio
+        self.sampling_strategy = sampling_strategy
 
         # Metadata
         self.item_genres = item_genres or {}
@@ -79,8 +84,11 @@ class BERT4RecDataset(Dataset):
         user = self.users[idx]
         seq = self.user_sequences[user]
 
-        # 1. First truncate the sequence (following BERT4Rec paper)
-        seq = seq[-self.max_len :]
+        # 1. First truncate/sample the sequence (following BERT4Rec paper)
+        if self.sampling_strategy == "weighted":
+            seq = self._weighted_sample_sequence(seq)
+        else:  # "recent" (default)
+            seq = seq[-self.max_len :]
 
         # 2. Then apply random masking (for data diversity)
         tokens, labels = self._random_mask_sequence(seq)
@@ -103,6 +111,54 @@ class BERT4RecDataset(Dataset):
         metadata = self._prepare_metadata(tokens)
 
         return torch.LongTensor(tokens), torch.LongTensor(labels), metadata
+
+    def _weighted_sample_sequence(self, seq):
+        """
+        Sample items from sequence using recency-weighted sampling without replacement
+
+        This method samples max_len items from the sequence where:
+        - More recent items have higher probability (linearly increasing: 1, 2, 3, ...)
+        - Original order is preserved (no shuffling)
+        - No duplicates (each item sampled at most once)
+
+        Probability formula for linear weights:
+        - Weight of position i: i (where i = 1, 2, 3, ..., seq_len)
+        - Sum of weights: seq_len * (seq_len + 1) / 2
+        - Probability of position i: i / (seq_len * (seq_len + 1) / 2)
+
+        Args:
+            seq: List[int] - Original sequence
+
+        Returns:
+            List[int] - Sampled sequence maintaining original order
+        """
+        seq_len = len(seq)
+
+        # If sequence is shorter than max_len, return as is
+        if seq_len <= self.max_len:
+            return seq
+
+        # Create recency-weighted probabilities (1, 2, 3, ..., seq_len)
+        # More recent items (at the end) have higher weights
+        # Using formula: weight_sum = n(n+1)/2
+        weights = np.arange(1, seq_len + 1, dtype=np.float64)
+        probabilities = weights / (seq_len * (seq_len + 1) / 2)
+
+        # Sample indices without replacement
+        sampled_indices = np.random.choice(
+            seq_len,
+            size=self.max_len,
+            replace=False,
+            p=probabilities
+        )
+
+        # Sort indices to maintain original order
+        sampled_indices = np.sort(sampled_indices)
+
+        # Extract items at sampled indices
+        sampled_seq = [seq[i] for i in sampled_indices]
+
+        return sampled_seq
 
     def _prepare_metadata(self, tokens):
         """
@@ -385,6 +441,7 @@ class BERT4RecDataModule(L.LightningDataModule):
             max_len: 50
             random_mask_prob: 0.15
             last_item_mask_ratio: 0.2
+            sampling_strategy: "recent"  # or "weighted"
             min_interactions: 3
             seed: 42
             num_workers: 4
@@ -401,6 +458,7 @@ class BERT4RecDataModule(L.LightningDataModule):
         max_len: int = 50,
         random_mask_prob: float = 0.2,
         last_item_mask_ratio: float = 0.0,
+        sampling_strategy: str = "recent",
         min_interactions: int = 3,
         seed: int = 42,
         num_workers: int = 4,
@@ -413,6 +471,7 @@ class BERT4RecDataModule(L.LightningDataModule):
         self.max_len = max_len
         self.random_mask_prob = random_mask_prob
         self.last_item_mask_ratio = last_item_mask_ratio
+        self.sampling_strategy = sampling_strategy
         self.min_interactions = min_interactions
         self.seed = seed
         self.num_workers = num_workers
@@ -821,6 +880,7 @@ class BERT4RecDataModule(L.LightningDataModule):
             mask_token=self.mask_token,
             pad_token=self.pad_token,
             last_item_mask_ratio=self.last_item_mask_ratio,
+            sampling_strategy=self.sampling_strategy,
             item_genres=self.item_genres,
             item_directors=self.item_directors,
             item_writers=self.item_writers,
