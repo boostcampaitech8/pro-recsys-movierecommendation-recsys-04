@@ -79,10 +79,13 @@ class BERT4RecDataset(Dataset):
         user = self.users[idx]
         seq = self.user_sequences[user]
 
-        # Always apply random masking first (for data diversity)
+        # 1. First truncate the sequence (following BERT4Rec paper)
+        seq = seq[-self.max_len :]
+
+        # 2. Then apply random masking (for data diversity)
         tokens, labels = self._random_mask_sequence(seq)
 
-        # Additionally mask the last item with probability last_item_mask_ratio
+        # 3. Additionally mask the last item with probability last_item_mask_ratio
         # This boosts next-item prediction performance while maintaining data diversity
         if len(seq) > 0 and np.random.random() < self.last_item_mask_ratio:
             # Force mask the last item (overwrite if already masked)
@@ -90,11 +93,7 @@ class BERT4RecDataset(Dataset):
             tokens[last_idx] = self.mask_token
             labels[last_idx] = seq[last_idx]  # Original item as label
 
-        # Truncate or pad
-        tokens = tokens[-self.max_len :]
-        labels = labels[-self.max_len :]
-
-        # Pad if necessary
+        # 4. Pad if necessary
         pad_len = self.max_len - len(tokens)
         if pad_len > 0:
             tokens = [self.pad_token] * pad_len + tokens
