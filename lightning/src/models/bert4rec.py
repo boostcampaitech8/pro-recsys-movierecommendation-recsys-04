@@ -33,15 +33,17 @@ class ScaledDotProductAttention(nn.Module):
 
         # Convert boolean mask to float mask for scaled_dot_product_attention
         # True (1) -> 0.0, False (0) -> -inf
-        attn_mask = torch.where(attn_mask.bool(), 0.0, float('-inf'))
+        attn_mask = torch.where(attn_mask.bool(), 0.0, float("-inf"))
 
         # Use Flash Attention (PyTorch 2.0+)
         # This is 2-4x faster than manual implementation
         output = F.scaled_dot_product_attention(
-            Q, K, V,
+            Q,
+            K,
+            V,
             attn_mask=attn_mask,
             dropout_p=self.dropout_rate if self.training else 0.0,
-            is_causal=False  # BERT4Rec uses bidirectional attention
+            is_causal=False,  # BERT4Rec uses bidirectional attention
         )
 
         # Note: Flash Attention doesn't return attention weights
@@ -581,14 +583,14 @@ class BERT4Rec(L.LightningModule):
 
         # Calculate NDCG for hits only
         # Find positions where predictions match targets
-        matches = (top_items == target_items_expanded)  # [batch, 10]
+        matches = top_items == target_items_expanded  # [batch, 10]
         ranks = matches.float().argmax(dim=1)  # [batch] - position of match (0-9)
 
         # Calculate NDCG only for hits
         ndcg_values = torch.where(
             hits,
             1.0 / torch.log2(ranks.float() + 2),  # +2 because rank starts at 0
-            torch.zeros_like(ranks.float())
+            torch.zeros_like(ranks.float()),
         )
         val_ndcg_10 = ndcg_values.sum().item()
 
@@ -649,11 +651,19 @@ class BERT4Rec(L.LightningModule):
 
     def configure_optimizers(self):
         """Configure optimizer for Lightning"""
-        optimizer = torch.optim.Adam(
-            self.parameters(), lr=self.lr, weight_decay=self.weight_decay
+        # We train the model using Adam [24] with learning
+        # rate of 1e-4, β1 = 0.9, β2 = 0.999, ℓ2 weight decay of 0.01, and
+        # linear decay of the learning rate.
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay,
+            betas=(0.9, 0.999),
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=self.trainer.max_epochs, eta_min=0.0001
+            optimizer,
+            T_max=self.trainer.max_epochs,
+            eta_min=self.lr / 10.0,
         )
         return [optimizer], [scheduler]
 
