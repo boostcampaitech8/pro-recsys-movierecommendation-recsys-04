@@ -30,7 +30,8 @@ class ScaledDotProductAttention(nn.Module):
         attn_score = torch.matmul(Q, K.transpose(2, 3)) / math.sqrt(self.head_dim)
 
         # Mask 적용 (padding 위치는 -inf로)
-        attn_score = attn_score.masked_fill(mask == 0, -1e9)
+        # Float16 compatible: -1e4 instead of -1e9
+        attn_score = attn_score.masked_fill(mask == 0, -1e4)
 
         # Softmax + Dropout
         attn_dist = self.dropout(F.softmax(attn_score, dim=-1))
@@ -51,7 +52,9 @@ class MultiHeadAttention(nn.Module):
 
         # hidden_units must be divisible by num_heads
         if hidden_units % num_heads != 0:
-            raise ValueError(f"hidden_units ({hidden_units}) must be divisible by num_heads ({num_heads})")
+            raise ValueError(
+                f"hidden_units ({hidden_units}) must be divisible by num_heads ({num_heads})"
+            )
 
         self.head_dim = hidden_units // num_heads
 
@@ -172,7 +175,7 @@ class BERT4Rec(L.LightningModule):
             num_layers: 3
             max_len: 50
             dropout_rate: 0.3
-            mask_prob: 0.15
+            random_mask_prob: 0.15
         training:
             lr: 0.001
             weight_decay: 0.0
@@ -186,10 +189,22 @@ class BERT4Rec(L.LightningModule):
         num_layers: int = 3,
         max_len: int = 50,
         dropout_rate: float = 0.3,
-        mask_prob: float = 0.15,
+        random_mask_prob: float = 0.2,
+        last_item_mask_ratio: float = 0.0,
         lr: float = 0.001,
         weight_decay: float = 0.0,
         share_embeddings: bool = True,
+        # Metadata parameters
+        num_genres: int = 1,
+        num_directors: int = 1,
+        num_writers: int = 1,
+        title_embedding_dim: int = 0,
+        use_genre_emb: bool = True,
+        use_director_emb: bool = True,
+        use_writer_emb: bool = True,
+        use_title_emb: bool = True,
+        metadata_fusion: str = "concat",
+        metadata_dropout: float = 0.1,
     ):
         """
         Args:
@@ -199,10 +214,21 @@ class BERT4Rec(L.LightningModule):
             num_layers: Number of transformer blocks
             max_len: Maximum sequence length
             dropout_rate: Dropout probability
-            mask_prob: Probability of masking items during training
+            random_mask_prob: Probability of masking items during random masking (not used in model, kept for compatibility)
+            last_item_mask_ratio: Ratio of samples using last item masking (not used in model, kept for compatibility)
             lr: Learning rate
             weight_decay: Weight decay for optimizer
             share_embeddings: Whether to share item embeddings with output layer
+            num_genres: Number of unique genres
+            num_directors: Number of unique directors
+            num_writers: Number of unique writers
+            title_embedding_dim: Dimension of pre-computed title embeddings
+            use_genre_emb: Whether to use genre embeddings
+            use_director_emb: Whether to use director embeddings
+            use_writer_emb: Whether to use writer embeddings
+            use_title_emb: Whether to use title embeddings
+            metadata_fusion: Fusion strategy ('concat', 'add', 'gate')
+            metadata_dropout: Dropout rate for metadata embeddings
         """
         super().__init__()
         self.save_hyperparameters()
@@ -213,31 +239,94 @@ class BERT4Rec(L.LightningModule):
         self.num_layers = num_layers
         self.max_len = max_len
         self.dropout_rate = dropout_rate
-        self.mask_prob = mask_prob
+        self.random_mask_prob = random_mask_prob
+        self.last_item_mask_ratio = last_item_mask_ratio
         self.lr = lr
         self.weight_decay = weight_decay
         self.share_embeddings = share_embeddings
+        self.metadata_fusion = metadata_fusion
 
         # Special tokens: 0=padding, num_items+1=mask
         self.pad_token = 0
         self.mask_token = num_items + 1
         self.num_tokens = num_items + 2
 
-        # Embeddings
+        # Item ID embedding (base)
         self.item_emb = nn.Embedding(
             self.num_tokens, hidden_units, padding_idx=self.pad_token
         )
         self.pos_emb = nn.Embedding(max_len, hidden_units)
+
+        # Metadata embeddings
+        self.use_genre_emb = use_genre_emb and num_genres > 1
+        self.use_director_emb = use_director_emb and num_directors > 1
+        self.use_writer_emb = use_writer_emb and num_writers > 1
+        self.use_title_emb = use_title_emb and title_embedding_dim > 0
+
+        if self.use_genre_emb:
+            self.genre_emb = nn.Embedding(num_genres, hidden_units, padding_idx=0)
+            log.info(f"Genre embedding enabled: {num_genres} genres -> {hidden_units}D")
+
+        if self.use_director_emb:
+            self.director_emb = nn.Embedding(num_directors, hidden_units, padding_idx=0)
+            log.info(
+                f"Director embedding enabled: {num_directors} directors -> {hidden_units}D"
+            )
+
+        if self.use_writer_emb:
+            self.writer_emb = nn.Embedding(num_writers, hidden_units, padding_idx=0)
+            log.info(
+                f"Writer embedding enabled: {num_writers} writers -> {hidden_units}D"
+            )
+
+        if self.use_title_emb:
+            self.title_projection = nn.Linear(title_embedding_dim, hidden_units)
+            log.info(
+                f"Title embedding enabled: {title_embedding_dim}D -> {hidden_units}D"
+            )
+
+        # Metadata fusion layer
+        num_features = 1  # item_emb
+        if self.use_genre_emb:
+            num_features += 1
+        if self.use_director_emb:
+            num_features += 1
+        if self.use_writer_emb:
+            num_features += 1
+        if self.use_title_emb:
+            num_features += 1
+
+        if metadata_fusion == "concat":
+            # Concatenate all embeddings and project back to hidden_units
+            self.fusion_layer = nn.Linear(hidden_units * num_features, hidden_units)
+            log.info(f"Fusion: concat {num_features} features -> projection")
+        elif metadata_fusion == "add":
+            # Simple weighted addition (no extra params)
+            self.fusion_layer = None
+            log.info(f"Fusion: weighted addition of {num_features} features")
+        elif metadata_fusion == "gate":
+            # Gated fusion (learnable weights per feature)
+            self.fusion_gate = nn.Linear(hidden_units * num_features, num_features)
+            self.fusion_layer = None
+            log.info(f"Fusion: gated mechanism with {num_features} features")
+        else:
+            raise ValueError(
+                f"Unknown metadata_fusion: {metadata_fusion}. Choose 'concat', 'add', or 'gate'"
+            )
+
+        self.metadata_dropout = nn.Dropout(metadata_dropout)
 
         # Input processing
         self.dropout = nn.Dropout(dropout_rate)
         self.emb_layernorm = nn.LayerNorm(hidden_units, eps=1e-6)
 
         # Transformer blocks
-        self.blocks = nn.ModuleList([
-            BERT4RecBlock(num_heads, hidden_units, dropout_rate)
-            for _ in range(num_layers)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                BERT4RecBlock(num_heads, hidden_units, dropout_rate)
+                for _ in range(num_layers)
+            ]
+        )
 
         # Output layer
         if share_embeddings:
@@ -267,12 +356,19 @@ class BERT4Rec(L.LightningModule):
                 nn.init.ones_(module.weight)
                 nn.init.zeros_(module.bias)
 
-    def forward(self, log_seqs):
+    def forward(self, log_seqs, metadata=None, return_gate_values=False):
         """
         Args:
             log_seqs: [batch_size, seq_len] - Input sequences (can be on any device)
+            metadata: Dict with keys:
+                - 'genres': [batch_size, seq_len, max_genres] - Genre indices (padded)
+                - 'directors': [batch_size, seq_len] - Director indices
+                - 'writers': [batch_size, seq_len, max_writers] - Writer indices (padded)
+                - 'title_embs': [batch_size, seq_len, title_emb_dim] - Pre-computed title embeddings
+            return_gate_values: If True, return gate values along with logits (only for gate fusion)
         Returns:
             logits: [batch_size, seq_len, num_tokens] - Output logits
+            gate_values: [batch_size, seq_len, num_features] - Gate values (if return_gate_values=True and using gate fusion)
         """
         # Convert to LongTensor and move to model's device
         if not isinstance(log_seqs, torch.Tensor):
@@ -281,11 +377,93 @@ class BERT4Rec(L.LightningModule):
 
         batch_size, seq_len = log_seqs.shape
 
-        # Item embeddings
-        seqs = self.item_emb(log_seqs)  # [batch, seq_len, hidden]
+        # Item ID embeddings
+        item_embs = self.item_emb(log_seqs)  # [batch, seq_len, hidden]
+
+        # Collect embeddings to fuse
+        embeddings_to_fuse = [item_embs]
+
+        # Genre embeddings (average pooling over multiple genres)
+        if self.use_genre_emb and metadata is not None and "genres" in metadata:
+            genre_indices = metadata["genres"].to(
+                self.device
+            )  # [batch, seq_len, max_genres]
+            genre_embs = self.genre_emb(
+                genre_indices
+            )  # [batch, seq_len, max_genres, hidden]
+            # Average pooling (ignore padding=0)
+            genre_mask = (
+                (genre_indices != 0).float().unsqueeze(-1)
+            )  # [batch, seq_len, max_genres, 1]
+            genre_embs_avg = (genre_embs * genre_mask).sum(dim=2) / (
+                genre_mask.sum(dim=2) + 1e-9
+            )
+            embeddings_to_fuse.append(genre_embs_avg)
+
+        # Director embeddings
+        if self.use_director_emb and metadata is not None and "directors" in metadata:
+            director_indices = metadata["directors"].to(self.device)  # [batch, seq_len]
+            director_embs = self.director_emb(
+                director_indices
+            )  # [batch, seq_len, hidden]
+            embeddings_to_fuse.append(director_embs)
+
+        # Writer embeddings (average pooling)
+        if self.use_writer_emb and metadata is not None and "writers" in metadata:
+            writer_indices = metadata["writers"].to(
+                self.device
+            )  # [batch, seq_len, max_writers]
+            writer_embs = self.writer_emb(
+                writer_indices
+            )  # [batch, seq_len, max_writers, hidden]
+            writer_mask = (writer_indices != 0).float().unsqueeze(-1)
+            writer_embs_avg = (writer_embs * writer_mask).sum(dim=2) / (
+                writer_mask.sum(dim=2) + 1e-9
+            )
+            embeddings_to_fuse.append(writer_embs_avg)
+
+        # Title embeddings (pre-computed, just project)
+        if self.use_title_emb and metadata is not None and "title_embs" in metadata:
+            title_embs_raw = metadata["title_embs"].to(
+                self.device
+            )  # [batch, seq_len, title_dim]
+            title_embs = self.title_projection(
+                title_embs_raw
+            )  # [batch, seq_len, hidden]
+            embeddings_to_fuse.append(title_embs)
+
+        # Fusion
+        gate_values = None
+        if self.metadata_fusion == "concat":
+            fused_embs = torch.cat(
+                embeddings_to_fuse, dim=-1
+            )  # [batch, seq_len, hidden*N]
+            seqs = self.fusion_layer(fused_embs)  # [batch, seq_len, hidden]
+        elif self.metadata_fusion == "add":
+            seqs = sum(embeddings_to_fuse) / len(embeddings_to_fuse)
+        elif self.metadata_fusion == "gate":
+            stacked = torch.cat(
+                embeddings_to_fuse, dim=-1
+            )  # [batch, seq_len, hidden*N]
+            gates = torch.softmax(
+                self.fusion_gate(stacked), dim=-1
+            )  # [batch, seq_len, N]
+            if return_gate_values:
+                gate_values = gates  # [batch, seq_len, N]
+            gates = gates.unsqueeze(-1)  # [batch, seq_len, N, 1]
+            stacked_embs = torch.stack(
+                embeddings_to_fuse, dim=2
+            )  # [batch, seq_len, N, hidden]
+            seqs = (gates * stacked_embs).sum(dim=2)  # [batch, seq_len, hidden]
+
+        seqs = self.metadata_dropout(seqs)
 
         # Positional embeddings
-        positions = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(batch_size, -1)
+        positions = (
+            torch.arange(seq_len, device=self.device)
+            .unsqueeze(0)
+            .expand(batch_size, -1)
+        )
         seqs += self.pos_emb(positions)
 
         # Dropout + LayerNorm
@@ -303,64 +481,36 @@ class BERT4Rec(L.LightningModule):
         # Output projection
         if self.share_embeddings:
             # Use item embedding weights transposed
-            logits = torch.matmul(seqs, self.item_emb.weight.T)  # [batch, seq_len, num_tokens]
+            logits = torch.matmul(
+                seqs, self.item_emb.weight.T
+            )  # [batch, seq_len, num_tokens]
         else:
             logits = self.out(seqs)
 
+        if return_gate_values and gate_values is not None:
+            return logits, gate_values
         return logits
-
-    def mask_sequence(self, seq):
-        """
-        Apply BERT-style masking to a sequence
-
-        Args:
-            seq: [seq_len] - Original sequence
-        Returns:
-            tokens: [seq_len] - Masked sequence
-            labels: [seq_len] - Labels (0 for non-masked, original item for masked)
-        """
-        tokens = []
-        labels = []
-
-        for item in seq:
-            prob = np.random.random()
-
-            if prob < self.mask_prob:
-                # Masked position
-                prob /= self.mask_prob
-
-                if prob < 0.8:
-                    # 80%: Replace with [MASK]
-                    tokens.append(self.mask_token)
-                elif prob < 0.9:
-                    # 10%: Replace with random item
-                    tokens.append(np.random.randint(1, self.num_items + 1))
-                else:
-                    # 10%: Keep original
-                    tokens.append(item)
-
-                labels.append(item)  # Original item as label
-            else:
-                # Not masked
-                tokens.append(item)
-                labels.append(self.pad_token)  # Ignore in loss
-
-        return tokens, labels
 
     def training_step(self, batch, batch_idx):
         """
         Training step for Lightning
 
         Args:
-            batch: (sequences, labels) from DataLoader
+            batch: (sequences, labels, metadata) from DataLoader
             batch_idx: Batch index
         Returns:
             loss: Training loss
         """
-        log_seqs, labels = batch
+        # Unpack batch (with metadata)
+        if len(batch) == 3:
+            log_seqs, labels, metadata = batch
+        else:
+            # Backward compatibility (without metadata)
+            log_seqs, labels = batch
+            metadata = None
 
         # Forward pass
-        logits = self(log_seqs)  # [batch, seq_len, num_tokens]
+        logits = self(log_seqs, metadata)  # [batch, seq_len, num_tokens]
 
         # Flatten for loss computation
         logits = logits.view(-1, self.num_tokens)  # [batch*seq_len, num_tokens]
@@ -370,7 +520,9 @@ class BERT4Rec(L.LightningModule):
         loss = self.criterion(logits, labels)
 
         # Logging
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
+        )
 
         return loss
 
@@ -379,30 +531,41 @@ class BERT4Rec(L.LightningModule):
         Validation step for Lightning
 
         Args:
-            batch: (sequences, labels, ground_truth_items) from DataLoader
+            batch: (sequences, labels, metadata, ground_truth_items) from DataLoader
             batch_idx: Batch index
         Returns:
             Dictionary with metrics
         """
-        log_seqs, _, target_items = batch
+        # Unpack batch (with metadata)
+        if len(batch) == 4:
+            log_seqs, _, metadata, target_items = batch
+        else:
+            # Backward compatibility (without metadata)
+            log_seqs, _, target_items = batch
+            metadata = None
 
-        # Forward pass
-        logits = self(log_seqs)  # [batch, seq_len, num_tokens]
+        # Forward pass (with gate values if using gate fusion)
+        if self.metadata_fusion == "gate":
+            logits, gate_values = self(log_seqs, metadata, return_gate_values=True)
+        else:
+            logits = self(log_seqs, metadata)
+            gate_values = None
 
         # Get predictions for last position
         scores = logits[:, -1, :]  # [batch, num_tokens]
 
         # Mask out padding and mask token
-        scores[:, self.pad_token] = -1e9
-        scores[:, self.mask_token] = -1e9
+        # Float16 compatible: -1e4 instead of -1e9
+        scores[:, self.pad_token] = -1e4
+        scores[:, self.mask_token] = -1e4
 
         # Get top-k predictions
         _, top_items = torch.topk(scores, k=10, dim=1)  # [batch, 10]
 
         # Compute metrics
         batch_size = target_items.size(0)
-        hit_10 = 0
-        ndcg_10 = 0
+        val_hit_10 = 0
+        val_ndcg_10 = 0
 
         for i in range(batch_size):
             target = target_items[i].item()
@@ -410,25 +573,174 @@ class BERT4Rec(L.LightningModule):
 
             if target in predictions:
                 rank = np.where(predictions == target)[0][0]
-                hit_10 += 1
-                ndcg_10 += 1 / np.log2(rank + 2)
+                val_hit_10 += 1
+                val_ndcg_10 += 1 / np.log2(rank + 2)
 
         # Logging
-        self.log('val_hit@10', hit_10 / batch_size, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log('val_ndcg@10', ndcg_10 / batch_size, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        self.log(
+            "val_hit@10",
+            val_hit_10 / batch_size,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+        self.log(
+            "val_ndcg@10",
+            val_ndcg_10 / batch_size,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
 
-        return {'hit@10': hit_10, 'ndcg@10': ndcg_10, 'batch_size': batch_size}
+        # Log gate values if using gate fusion
+        if gate_values is not None:
+            # Average gate values across batch and sequence length
+            # gate_values: [batch, seq_len, num_features]
+            avg_gates = gate_values.mean(dim=[0, 1])  # [num_features]
+
+            # Feature names based on enabled features
+            feature_names = ["item"]
+            if self.use_genre_emb:
+                feature_names.append("genre")
+            if self.use_director_emb:
+                feature_names.append("director")
+            if self.use_writer_emb:
+                feature_names.append("writer")
+            if self.use_title_emb:
+                feature_names.append("title")
+
+            # Log each feature's importance
+            for i, name in enumerate(feature_names):
+                self.log(
+                    f"val_gate/{name}",
+                    avg_gates[i].item(),
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=False,
+                    logger=True,
+                )
+
+            # Store final gate values (will be printed after training)
+            self._final_gate_values = (feature_names, avg_gates.detach().cpu())
+
+        return {
+            "val_hit@10": val_hit_10,
+            "val_ndcg@10": val_ndcg_10,
+            "batch_size": batch_size,
+        }
 
     def configure_optimizers(self):
         """Configure optimizer for Lightning"""
         optimizer = torch.optim.Adam(
-            self.parameters(),
-            lr=self.lr,
-            weight_decay=self.weight_decay
+            self.parameters(), lr=self.lr, weight_decay=self.weight_decay
         )
         return optimizer
 
-    def predict(self, user_sequences, topk=10, exclude_items=None):
+    def _prepare_batch_metadata(self, seqs, item_metadata):
+        """
+        Prepare metadata dict for a batch of sequences
+
+        Args:
+            seqs: np.array or torch.Tensor [batch_size, seq_len] - Item sequences
+            item_metadata: Dict with metadata mappings from DataModule
+                {
+                    'genres': Dict[item_idx, List[genre_idx]],
+                    'directors': Dict[item_idx, director_idx],
+                    'writers': Dict[item_idx, List[writer_idx]],
+                    'title_embs': Dict[item_idx, np.array]
+                }
+        Returns:
+            metadata: Dict with batched metadata tensors
+        """
+        if item_metadata is None:
+            return None
+
+        # Convert to numpy if needed
+        if isinstance(seqs, torch.Tensor):
+            seqs = seqs.cpu().numpy()
+
+        batch_size, seq_len = seqs.shape
+        metadata = {}
+        max_genres = 5
+        max_writers = 5
+
+        # Genres (multi-hot, padded)
+        if "genres" in item_metadata:
+            item_genres = item_metadata["genres"]
+            genre_batch = []
+            for seq in seqs:
+                seq_genres = []
+                for item_idx in seq:
+                    if item_idx in item_genres:
+                        genres = item_genres[item_idx][:max_genres]
+                        genres = genres + [0] * (max_genres - len(genres))
+                    else:
+                        genres = [0] * max_genres
+                    seq_genres.append(genres)
+                genre_batch.append(seq_genres)
+            metadata["genres"] = torch.LongTensor(genre_batch).to(
+                self.device
+            )  # [batch, seq_len, max_genres]
+
+        # Directors (single value per item)
+        if "directors" in item_metadata:
+            item_directors = item_metadata["directors"]
+            director_batch = []
+            for seq in seqs:
+                seq_directors = [
+                    item_directors.get(int(item_idx), 0) for item_idx in seq
+                ]
+                director_batch.append(seq_directors)
+            metadata["directors"] = torch.LongTensor(director_batch).to(
+                self.device
+            )  # [batch, seq_len]
+
+        # Writers (multi-hot, padded)
+        if "writers" in item_metadata:
+            item_writers = item_metadata["writers"]
+            writer_batch = []
+            for seq in seqs:
+                seq_writers = []
+                for item_idx in seq:
+                    if item_idx in item_writers:
+                        writers = item_writers[item_idx][:max_writers]
+                        writers = writers + [0] * (max_writers - len(writers))
+                    else:
+                        writers = [0] * max_writers
+                    seq_writers.append(writers)
+                writer_batch.append(seq_writers)
+            metadata["writers"] = torch.LongTensor(writer_batch).to(
+                self.device
+            )  # [batch, seq_len, max_writers]
+
+        # Title embeddings (pre-computed)
+        if "title_embs" in item_metadata:
+            item_title_embs = item_metadata["title_embs"]
+            # Get embedding dimension from first available embedding
+            title_dim = None
+            for emb in item_title_embs.values():
+                title_dim = len(emb)
+                break
+
+            if title_dim is not None:
+                title_batch = []
+                for seq in seqs:
+                    seq_titles = []
+                    for item_idx in seq:
+                        if item_idx in item_title_embs:
+                            seq_titles.append(item_title_embs[item_idx])
+                        else:
+                            seq_titles.append(np.zeros(title_dim))
+                    title_batch.append(seq_titles)
+                metadata["title_embs"] = torch.FloatTensor(np.array(title_batch)).to(
+                    self.device
+                )  # [batch, seq_len, title_dim]
+
+        return metadata
+
+    def predict(self, user_sequences, topk=10, exclude_items=None, item_metadata=None):
         """
         Generate top-k recommendations for given sequences
 
@@ -436,6 +748,7 @@ class BERT4Rec(L.LightningModule):
             user_sequences: List of sequences [[item1, item2, ...], ...]
             topk: Number of items to recommend
             exclude_items: List of sets of items to exclude per user
+            item_metadata: Dict with metadata mappings (genres, directors, writers, title_embs)
         Returns:
             recommendations: List of lists of top-k item IDs
         """
@@ -445,28 +758,38 @@ class BERT4Rec(L.LightningModule):
             # Prepare sequences (add mask token at the end)
             seqs = []
             for seq in user_sequences:
-                masked_seq = (list(seq) + [self.mask_token])[-self.max_len:]
+                masked_seq = (list(seq) + [self.mask_token])[-self.max_len :]
                 if len(masked_seq) < self.max_len:
-                    masked_seq = [self.pad_token] * (self.max_len - len(masked_seq)) + masked_seq
+                    masked_seq = [self.pad_token] * (
+                        self.max_len - len(masked_seq)
+                    ) + masked_seq
                 seqs.append(masked_seq)
 
-            seqs = np.array(seqs, dtype=np.int64)
+            seqs_array = np.array(seqs, dtype=np.int64)
 
-            # Forward pass
-            logits = self(seqs)
+            # Prepare metadata for batch (if provided)
+            metadata = None
+            if item_metadata is not None:
+                metadata = self._prepare_batch_metadata(seqs_array, item_metadata)
+
+            # Forward pass WITH metadata
+            logits = self(seqs_array, metadata)
             scores = logits[:, -1, :]  # Last position
 
             # Mask invalid items
-            scores[:, self.pad_token] = -1e9
-            scores[:, self.mask_token] = -1e9
+            # Float16 compatible: -1e4 instead of -1e9
+            scores[:, self.pad_token] = -1e4
+            scores[:, self.mask_token] = -1e4
 
             # Exclude already seen items
             if exclude_items is not None:
                 for i, items in enumerate(exclude_items):
                     if items:
-                        scores[i, list(items)] = -1e9
+                        scores[i, list(items)] = -1e4
 
-            # Get top-k
-            _, top_items = torch.topk(scores, k=topk, dim=1)
+            # Get top-k (cap topk to number of available items)
+            max_k = scores.size(1)  # Total number of items (including special tokens)
+            actual_k = min(topk, max_k)
+            _, top_items = torch.topk(scores, k=actual_k, dim=1)
 
             return top_items.cpu().numpy()
