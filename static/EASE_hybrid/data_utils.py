@@ -56,24 +56,27 @@ def load_metadata_matrix(data_dir, item2idx, num_items):
     Returns:
         dict[str, csr_matrix]
         {
-            "genres": (num_items x num_genres),
+            "genres":    (num_items x num_genres),
             "directors": (num_items x num_directors),
-            "writers": (num_items x num_writers),
-            "years": (num_items x num_years)
+            "writers":   (num_items x num_writers),
+            "years":     (num_items x num_years),
+            "titles":    (num_items x vocab_size)  # TF-IDF
         }
     """
     import os
     import numpy as np
     import pandas as pd
     from scipy.sparse import csr_matrix
+    from sklearn.feature_extraction.text import TfidfVectorizer
 
-    print("📂 Loading Metadata (Separated)...")
+    print("📂 Loading Metadata (Separated + TF-IDF titles)...")
 
     files = {
         "genres": "genres.tsv",
         "directors": "directors.tsv",
         "writers": "writers.tsv",
         "years": "years.tsv",
+        "titles": "titles.tsv",   # 🔥 titles 추가
     }
 
     meta_mats = {}
@@ -84,6 +87,41 @@ def load_metadata_matrix(data_dir, item2idx, num_items):
             print(f"⚠️ {filename} not found. Skipping.")
             continue
 
+        # ===============================
+        # 🔥 Titles: TF-IDF 처리
+        # ===============================
+        if name == "titles":
+            df = pd.read_csv(path, sep="\t")
+            df.columns = ["item", "title"]
+
+            df = df[df["item"].isin(item2idx)]
+            if len(df) == 0:
+                print("⚠️ titles: no valid rows.")
+                continue
+
+            item_indices = df["item"].map(item2idx).values
+            titles = df["title"].astype(str).values
+
+            vectorizer = TfidfVectorizer(
+                max_features=3000,
+                ngram_range=(1, 2),
+                stop_words="english",
+                norm="l2",
+            )
+
+            tfidf = vectorizer.fit_transform(titles)
+
+            # item index 기준으로 full matrix 생성
+            full_mat = csr_matrix((num_items, tfidf.shape[1]))
+            full_mat[item_indices] = tfidf
+
+            meta_mats["titles"] = full_mat
+            print(f"   ✅ titles (tfidf): {full_mat.shape}")
+            continue
+
+        # ===============================
+        # 기존 categorical metadata
+        # ===============================
         df = pd.read_csv(path, sep="\t")
         df.columns = ["item", "value"]
 
@@ -113,6 +151,7 @@ def load_metadata_matrix(data_dir, item2idx, num_items):
         return None
 
     return meta_mats
+
 
 
 

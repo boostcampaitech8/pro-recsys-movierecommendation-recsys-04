@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 # 데이터 로드
-static = pd.read_csv("/data/ephemeral/home/Seung/output/EASE_Hybrid/submission EASE_lambda800_alpha40.0.csv")
+static = pd.read_csv("/data/ephemeral/home/Seung/output/EASE_Hybrid/submission EASE_lambda500_alpha35.0.csv")
 sequential = pd.read_csv("/data/ephemeral/home/Seung/output/BERT4Rec/bert4rec.csv")
 
 users = len(static) // 10

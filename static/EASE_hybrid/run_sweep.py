@@ -107,6 +107,7 @@ def main():
         "directors": alpha,
         "writers": alpha,
         "years": alpha,
+        "titles": alpha
     }
 
     print("📌 Fixed metadata weights:")
