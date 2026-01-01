@@ -7,6 +7,7 @@ from src.data.preprocessor import DataProcessor
 from src.data.dataset import StaticDataset
 from src.models.multi_vae import MultiVAE
 from src.models.ease import Ease
+from src.models.ea_vae import EAVAE
 from src.loss.loss import multivae_loss
 from trainer import Trainer
 
@@ -14,23 +15,23 @@ from trainer import Trainer
 CONFIG = {
     'input_dim': None, # 데이터 로드 후 설정됨
     'q_dims': [1024, 256],
-    'dropout_rate': 0.5,
+    'dropout_rate': 0.2,
     
     'batch_size': 500,
     'epochs': 300,
-    'lr': 5e-4,
-    'patience': 20,
-    'k': 20, # Recall@10
+    'lr': 2e-4,
+    'patience': 100,
+    'k': 10, # Recall@10
     
-    'total_anneal_steps': 30000,
+    'total_anneal_steps': 50000,
     'anneal_cap': 0.2,
     
-    'save_dir': './saved/models/multi-vae/',
+    'save_dir': './saved/models/ea-vae/',
     'data_path': './data/train/train_ratings.csv',
     
     'seed': 87,
     
-    'model': 'EASE',
+    'model': 'EAVAE',
 }
 
 def main():
@@ -43,7 +44,7 @@ def main():
     # 여기서는 안전한 비율 보장형 사용
     train_mat, valid_mat = processor.split_data(df, test_ratio=0.01, seed=CONFIG['seed'])
     
-    if CONFIG['model'] != 'EASE':
+    if CONFIG['model'] == 'MultiVAE':
         num_users, num_items = train_mat.shape
         CONFIG['input_dim'] = num_items
         print(f"Users: {num_users}, Items: {num_items}")
@@ -83,7 +84,7 @@ def main():
         
         trainer.fit()
         
-    else:
+    elif CONFIG['model'] in ['EASE', 'EAVAE']:
         model = Ease(reg_lambda=500)
         model.fit(train_mat)
         
@@ -144,6 +145,36 @@ def main():
         
         print(f"Final Validation Recall@{k}: {mean_recall:.4f}")
         
+        if CONFIG['model'] == 'EAVAE':
+            num_users, num_items = train_mat.shape
+            CONFIG['input_dim'] = num_items
+            print(f"Users: {num_users}, Items: {num_items}")
+            
+            train_dataset = StaticDataset(train_mat)
+            
+            train_loader = DataLoader(
+                train_dataset, 
+                batch_size=CONFIG['batch_size'], 
+                shuffle=True
+            )
+            
+            q_dims = [CONFIG['input_dim'], *CONFIG['q_dims']]
+            vae_model = EAVAE(ease_weight=model.weight, q_dims=q_dims, dropout_rate=CONFIG['dropout_rate'], ease_rate=0.3)
+            
+            # 4. Optimizer
+            optimizer = torch.optim.Adam(vae_model.parameters(), lr=CONFIG['lr'])
+        
+            # 5. Trainer Init & Run
+            trainer = Trainer(
+                model=vae_model,
+                optimizer=optimizer,
+                loss_function=multivae_loss,
+                train_loader=train_loader,
+                valid_loader=valid_loader,
+                config=CONFIG
+            )
+        
+            trainer.fit()
 
 if __name__ == "__main__":
     main()

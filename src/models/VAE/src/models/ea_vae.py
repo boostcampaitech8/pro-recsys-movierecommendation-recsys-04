@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class EAVAE(nn.Module):
-    def __init__(self: nn.Module, ease_weight, q_dims, p_dims=None, dropout_rate=0.5):
+    def __init__(self: nn.Module, ease_weight: torch.Tensor, q_dims, p_dims=None, ease_rate=0.5, dropout_rate=0.5):
         """
         Args:
             ease_weight (torch.Tensor): EASE모델의 weight
@@ -20,7 +20,12 @@ class EAVAE(nn.Module):
         # EASE의 가중치를 참조용으로 따로 저장
         # 학습이 되지않는 텐서    
         self.register_buffer('ease_weight', ease_weight.clone().detach())
-        
+        self.ease_rate = ease_rate
+        self.ease_ln = nn.LayerNorm(self.q_dims[0], elementwise_affine=False)
+        self.gate_layer = nn.Sequential(
+            nn.Linear(q_dims[0], q_dims[0]),
+            nn.Sigmoid()
+        )
         
         # Encoder (q_z|x)
         # input -> hidden -> latent
@@ -44,12 +49,14 @@ class EAVAE(nn.Module):
         
         self.decoder = nn.Sequential(*decoder_modules)
             
-        
         # Dropout
         self.dropout = nn.Dropout(dropout_rate)
         
         # 가중치 초기화
         self.apply(self.init_weights)
+        
+        self.output_alpha = nn.Parameter(torch.tensor(20.0))
+        self.output_beta = nn.Parameter(torch.tensor(0.0))
         
     def init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -87,25 +94,36 @@ class EAVAE(nn.Module):
     
     def forward(self, x):
         # L2 Normalization
+        
+        # ease_logits = x @ self.ease_weight
+        # ease_norm = self.ease_ln(ease_logits)
+        # ease_prob = torch.sigmoid(ease_norm)
         # row vector마다 기존의 multi-hot vector를 크기를 1로 정규화
-        x = F.normalize(x, p=2, dim=1)
+        
+        # alpha = self.gate_layer(x)
+        
+        # enhanced_input = x + alpha * ease_prob
+        
+        x_norm = F.normalize(x, p=2, dim=1)
         
         # Dropout
-        x = self.dropout(x)
+        x_drop = self.dropout(x_norm)
         
         # Encoding
-        mu, logvar = self.encode(x)
+        mu, logvar = self.encode(x_drop)
         
-        # sampling
+        # samplings
         z = self.reparameterize(mu, logvar)
         
         # Decoding
-        recon_x = self.decode(z)
+        vae_logits = self.decode(z)
         
-        return recon_x, mu, logvar
-    
-    
-    
+        ease_base = x @ self.ease_weight
+        ease_norm = F.normalize(ease_base, p=2, dim=1)
         
+        # ease_scale_factor = 100.0  # 50~100 사이 값 추천
+        # ease_base_scaled = ease_base / ease_scale_factor
         
+        final_logits = self.output_alpha * ease_norm + self.output_beta * vae_logits
         
+        return final_logits, mu, logvar
