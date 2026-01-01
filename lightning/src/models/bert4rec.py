@@ -177,17 +177,6 @@ class BERT4Rec(L.LightningModule):
     - Learnable positional embeddings
     - Output embedding weight sharing for efficiency
 
-    Hydra 설정 사용:
-        model:
-            hidden_units: 64
-            num_heads: 4
-            num_layers: 3
-            max_len: 50
-            dropout_rate: 0.3
-            random_mask_prob: 0.15
-        training:
-            lr: 0.001
-            weight_decay: 0.0
     """
 
     def __init__(
@@ -208,11 +197,11 @@ class BERT4Rec(L.LightningModule):
         num_directors: int = 1,
         num_writers: int = 1,
         title_embedding_dim: int = 0,
-        use_genre_emb: bool = True,
-        use_director_emb: bool = True,
-        use_writer_emb: bool = True,
-        use_title_emb: bool = True,
-        metadata_fusion: str = "concat",
+        use_genre_emb: bool = False,
+        use_director_emb: bool = False,
+        use_writer_emb: bool = False,
+        use_title_emb: bool = False,
+        metadata_fusion: str = "gate",
         metadata_dropout: float = 0.1,
     ):
         """

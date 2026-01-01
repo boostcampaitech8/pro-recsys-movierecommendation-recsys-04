@@ -51,6 +51,11 @@ def main(cfg: DictConfig):
         seed=cfg.data.seed,
         num_workers=cfg.data.num_workers,
         sampling_strategy=cfg.data.sampling_strategy,  # Match training configuration
+        # Metadata loading flags
+        use_genre_emb=cfg.model.use_genre_emb,
+        use_director_emb=cfg.model.use_director_emb,
+        use_writer_emb=cfg.model.use_writer_emb,
+        use_title_emb=cfg.model.use_title_emb,
     )
 
     # Setup data

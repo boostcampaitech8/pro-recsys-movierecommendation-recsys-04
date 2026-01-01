@@ -474,6 +474,11 @@ class BERT4RecDataModule(L.LightningDataModule):
         seed: int = 42,
         num_workers: int = 4,
         use_full_data: bool = False,
+        # Metadata loading flags
+        use_genre_emb: bool = False,
+        use_director_emb: bool = False,
+        use_writer_emb: bool = False,
+        use_title_emb: bool = False,
     ):
         super().__init__()
         self.data_dir = os.path.expanduser(data_dir)
@@ -487,6 +492,11 @@ class BERT4RecDataModule(L.LightningDataModule):
         self.seed = seed
         self.num_workers = num_workers
         self.use_full_data = use_full_data
+        # Metadata flags
+        self.use_genre_emb = use_genre_emb
+        self.use_director_emb = use_director_emb
+        self.use_writer_emb = use_writer_emb
+        self.use_title_emb = use_title_emb
 
         # Special tokens
         self.pad_token = 0
@@ -691,193 +701,205 @@ class BERT4RecDataModule(L.LightningDataModule):
         self.genre2idx = {}
         self.num_genres = 1  # 0 is reserved for padding
 
-        genres_path = os.path.join(self.data_dir, "genres.tsv")
-        if os.path.exists(genres_path):
-            try:
-                genres_df = pd.read_csv(genres_path, sep="\t")
-                log.info(f"Loaded {len(genres_df)} genre entries")
+        if self.use_genre_emb:
+            genres_path = os.path.join(self.data_dir, "genres.tsv")
+            if os.path.exists(genres_path):
+                try:
+                    genres_df = pd.read_csv(genres_path, sep="\t")
+                    log.info(f"Loading {len(genres_df)} genre entries")
 
-                # Build genre vocabulary
-                unique_genres = genres_df["genre"].unique()
-                self.genre2idx = {
-                    genre: idx + 1 for idx, genre in enumerate(unique_genres)
-                }
-                self.num_genres = len(self.genre2idx) + 1  # +1 for padding
+                    # Build genre vocabulary
+                    unique_genres = genres_df["genre"].unique()
+                    self.genre2idx = {
+                        genre: idx + 1 for idx, genre in enumerate(unique_genres)
+                    }
+                    self.num_genres = len(self.genre2idx) + 1  # +1 for padding
 
-                # Build item->genres mapping (1:N relationship)
-                for item_id, group in genres_df.groupby("item"):
-                    if item_id in self.item2idx.index:
-                        item_idx = self.item2idx[item_id]
-                        genre_indices = [
-                            self.genre2idx[g] for g in group["genre"].values
-                        ]
-                        self.item_genres[item_idx] = genre_indices
+                    # Build item->genres mapping (1:N relationship)
+                    for item_id, group in genres_df.groupby("item"):
+                        if item_id in self.item2idx.index:
+                            item_idx = self.item2idx[item_id]
+                            genre_indices = [
+                                self.genre2idx[g] for g in group["genre"].values
+                            ]
+                            self.item_genres[item_idx] = genre_indices
 
-                log.info(
-                    f"Loaded {self.num_genres-1} unique genres for {len(self.item_genres)} items"
-                )
-            except Exception as e:
-                log.error(f"Error loading genres: {e}")
-                self.item_genres = {}
-                self.genre2idx = {}
-                self.num_genres = 1
+                    log.info(
+                        f"Loaded {self.num_genres-1} unique genres for {len(self.item_genres)} items"
+                    )
+                except Exception as e:
+                    log.error(f"Error loading genres: {e}")
+                    self.item_genres = {}
+                    self.genre2idx = {}
+                    self.num_genres = 1
+            else:
+                log.warning(f"genres.tsv not found at {genres_path}")
         else:
-            log.warning(f"genres.tsv not found at {genres_path}")
+            log.info("Skipping genre metadata loading (use_genre_emb=False)")
 
         # ===== Load Directors Metadata =====
         self.item_directors = {}
         self.director2idx = {}
         self.num_directors = 1  # 0 is reserved for padding
 
-        directors_path = os.path.join(self.data_dir, "directors.tsv")
-        if os.path.exists(directors_path):
-            try:
-                directors_df = pd.read_csv(directors_path, sep="\t")
-                log.info(f"Loaded {len(directors_df)} director entries")
+        if self.use_director_emb:
+            directors_path = os.path.join(self.data_dir, "directors.tsv")
+            if os.path.exists(directors_path):
+                try:
+                    directors_df = pd.read_csv(directors_path, sep="\t")
+                    log.info(f"Loading {len(directors_df)} director entries")
 
-                # Build director vocabulary
-                unique_directors = directors_df["director"].unique()
-                self.director2idx = {
-                    d: idx + 1 for idx, d in enumerate(unique_directors)
-                }
-                self.num_directors = len(self.director2idx) + 1
+                    # Build director vocabulary
+                    unique_directors = directors_df["director"].unique()
+                    self.director2idx = {
+                        d: idx + 1 for idx, d in enumerate(unique_directors)
+                    }
+                    self.num_directors = len(self.director2idx) + 1
 
-                # Build item->director mapping (1:1 relationship)
-                director_map = dict(zip(directors_df["item"], directors_df["director"]))
-                for item_id, director_id in director_map.items():
-                    if item_id in self.item2idx.index:
-                        item_idx = self.item2idx[item_id]
-                        self.item_directors[item_idx] = self.director2idx[director_id]
+                    # Build item->director mapping (1:1 relationship)
+                    director_map = dict(zip(directors_df["item"], directors_df["director"]))
+                    for item_id, director_id in director_map.items():
+                        if item_id in self.item2idx.index:
+                            item_idx = self.item2idx[item_id]
+                            self.item_directors[item_idx] = self.director2idx[director_id]
 
-                log.info(
-                    f"Loaded {self.num_directors-1} unique directors for {len(self.item_directors)} items"
-                )
-            except Exception as e:
-                log.error(f"Error loading directors: {e}")
-                self.item_directors = {}
-                self.director2idx = {}
-                self.num_directors = 1
+                    log.info(
+                        f"Loaded {self.num_directors-1} unique directors for {len(self.item_directors)} items"
+                    )
+                except Exception as e:
+                    log.error(f"Error loading directors: {e}")
+                    self.item_directors = {}
+                    self.director2idx = {}
+                    self.num_directors = 1
+            else:
+                log.warning(f"directors.tsv not found at {directors_path}")
         else:
-            log.warning(f"directors.tsv not found at {directors_path}")
+            log.info("Skipping director metadata loading (use_director_emb=False)")
 
         # ===== Load Writers Metadata =====
         self.item_writers = {}
         self.writer2idx = {}
         self.num_writers = 1  # 0 is reserved for padding
 
-        writers_path = os.path.join(self.data_dir, "writers.tsv")
-        if os.path.exists(writers_path):
-            try:
-                writers_df = pd.read_csv(writers_path, sep="\t")
-                log.info(f"Loaded {len(writers_df)} writer entries")
+        if self.use_writer_emb:
+            writers_path = os.path.join(self.data_dir, "writers.tsv")
+            if os.path.exists(writers_path):
+                try:
+                    writers_df = pd.read_csv(writers_path, sep="\t")
+                    log.info(f"Loading {len(writers_df)} writer entries")
 
-                # Build writer vocabulary
-                unique_writers = writers_df["writer"].unique()
-                self.writer2idx = {w: idx + 1 for idx, w in enumerate(unique_writers)}
-                self.num_writers = len(self.writer2idx) + 1
+                    # Build writer vocabulary
+                    unique_writers = writers_df["writer"].unique()
+                    self.writer2idx = {w: idx + 1 for idx, w in enumerate(unique_writers)}
+                    self.num_writers = len(self.writer2idx) + 1
 
-                # Build item->writers mapping (1:N relationship)
-                for item_id, group in writers_df.groupby("item"):
-                    if item_id in self.item2idx.index:
-                        item_idx = self.item2idx[item_id]
-                        writer_indices = [
-                            self.writer2idx[w] for w in group["writer"].values
-                        ]
-                        self.item_writers[item_idx] = writer_indices
+                    # Build item->writers mapping (1:N relationship)
+                    for item_id, group in writers_df.groupby("item"):
+                        if item_id in self.item2idx.index:
+                            item_idx = self.item2idx[item_id]
+                            writer_indices = [
+                                self.writer2idx[w] for w in group["writer"].values
+                            ]
+                            self.item_writers[item_idx] = writer_indices
 
-                log.info(
-                    f"Loaded {self.num_writers-1} unique writers for {len(self.item_writers)} items"
-                )
-            except Exception as e:
-                log.error(f"Error loading writers: {e}")
-                self.item_writers = {}
-                self.writer2idx = {}
-                self.num_writers = 1
+                    log.info(
+                        f"Loaded {self.num_writers-1} unique writers for {len(self.item_writers)} items"
+                    )
+                except Exception as e:
+                    log.error(f"Error loading writers: {e}")
+                    self.item_writers = {}
+                    self.writer2idx = {}
+                    self.num_writers = 1
+            else:
+                log.warning(f"writers.tsv not found at {writers_path}")
         else:
-            log.warning(f"writers.tsv not found at {writers_path}")
+            log.info("Skipping writer metadata loading (use_writer_emb=False)")
 
         # ===== Load Title Embeddings =====
         self.item_title_embeddings = {}
         self.title_embedding_dim = 0
 
-        # Try loading from TSV file first (new format from preprocess_title_genre_embeddings.py)
-        title_emb_tsv_path = os.path.join(self.data_dir, "title_embeddings/titles.tsv")
+        if self.use_title_emb:
+            # Try loading from TSV file first (new format from preprocess_title_genre_embeddings.py)
+            title_emb_tsv_path = os.path.join(self.data_dir, "title_embeddings/titles.tsv")
 
-        if os.path.exists(title_emb_tsv_path):
-            try:
-                log.info(f"Loading title embeddings from {title_emb_tsv_path}")
-                with open(title_emb_tsv_path, "r") as f:
-                    # Skip header
-                    next(f)
-
-                    for line in f:
-                        parts = line.strip().split("\t")
-                        if len(parts) != 2:
-                            continue
-
-                        item_id = int(parts[0])
-                        emb_values = np.array([float(x) for x in parts[1].split()])
-
-                        # Set embedding dimension from first item
-                        if self.title_embedding_dim == 0:
-                            self.title_embedding_dim = len(emb_values)
-
-                        # Convert to indexed mapping
-                        if item_id in self.item2idx.index:
-                            item_idx = self.item2idx[item_id]
-                            self.item_title_embeddings[item_idx] = emb_values
-
-                log.info(
-                    f"Loaded {len(self.item_title_embeddings)} title embeddings (dim={self.title_embedding_dim})"
-                )
-            except Exception as e:
-                log.error(f"Error loading title embeddings from TSV: {e}")
-                log.warning(
-                    "Title embeddings not found. Run scripts/preprocess_title_genre_embeddings.py first."
-                )
-                self.item_title_embeddings = {}
-                self.title_embedding_dim = 0
-        else:
-            # Fallback: try loading from pickle file (legacy format)
-            title_emb_pkl_path = os.path.join(
-                self.data_dir, "title_embeddings/title_embeddings.pkl"
-            )
-
-            if os.path.exists(title_emb_pkl_path):
+            if os.path.exists(title_emb_tsv_path):
                 try:
-                    log.info(
-                        f"Loading title embeddings from {title_emb_pkl_path} (legacy pickle format)"
-                    )
-                    import pickle
+                    log.info(f"Loading title embeddings from {title_emb_tsv_path}")
+                    with open(title_emb_tsv_path, "r") as f:
+                        # Skip header
+                        next(f)
 
-                    with open(title_emb_pkl_path, "rb") as f:
-                        title_emb_dict = pickle.load(f)  # {original_item_id: embedding}
+                        for line in f:
+                            parts = line.strip().split("\t")
+                            if len(parts) != 2:
+                                continue
 
-                    # Load metadata
-                    metadata_path = os.path.join(
-                        self.data_dir, "title_embeddings/metadata.pkl"
-                    )
-                    with open(metadata_path, "rb") as f:
-                        metadata = pickle.load(f)
-                    self.title_embedding_dim = metadata["embedding_dim"]
+                            item_id = int(parts[0])
+                            emb_values = np.array([float(x) for x in parts[1].split()])
 
-                    # Convert to indexed mapping
-                    for item_id, emb in title_emb_dict.items():
-                        if item_id in self.item2idx.index:
-                            item_idx = self.item2idx[item_id]
-                            self.item_title_embeddings[item_idx] = emb
+                            # Set embedding dimension from first item
+                            if self.title_embedding_dim == 0:
+                                self.title_embedding_dim = len(emb_values)
+
+                            # Convert to indexed mapping
+                            if item_id in self.item2idx.index:
+                                item_idx = self.item2idx[item_id]
+                                self.item_title_embeddings[item_idx] = emb_values
 
                     log.info(
                         f"Loaded {len(self.item_title_embeddings)} title embeddings (dim={self.title_embedding_dim})"
                     )
                 except Exception as e:
-                    log.error(f"Error loading title embeddings from pickle: {e}")
+                    log.error(f"Error loading title embeddings from TSV: {e}")
+                    log.warning(
+                        "Title embeddings not found. Run scripts/preprocess_title_genre_embeddings.py first."
+                    )
                     self.item_title_embeddings = {}
                     self.title_embedding_dim = 0
             else:
-                log.warning(
-                    f"Title embeddings not found. Run scripts/preprocess_title_genre_embeddings.py first."
+                # Fallback: try loading from pickle file (legacy format)
+                title_emb_pkl_path = os.path.join(
+                    self.data_dir, "title_embeddings/title_embeddings.pkl"
                 )
+
+                if os.path.exists(title_emb_pkl_path):
+                    try:
+                        log.info(
+                            f"Loading title embeddings from {title_emb_pkl_path} (legacy pickle format)"
+                        )
+                        import pickle
+
+                        with open(title_emb_pkl_path, "rb") as f:
+                            title_emb_dict = pickle.load(f)  # {original_item_id: embedding}
+
+                        # Load metadata
+                        metadata_path = os.path.join(
+                            self.data_dir, "title_embeddings/metadata.pkl"
+                        )
+                        with open(metadata_path, "rb") as f:
+                            metadata = pickle.load(f)
+                        self.title_embedding_dim = metadata["embedding_dim"]
+
+                        # Convert to indexed mapping
+                        for item_id, emb in title_emb_dict.items():
+                            if item_id in self.item2idx.index:
+                                item_idx = self.item2idx[item_id]
+                                self.item_title_embeddings[item_idx] = emb
+
+                        log.info(
+                            f"Loaded {len(self.item_title_embeddings)} title embeddings (dim={self.title_embedding_dim})"
+                        )
+                    except Exception as e:
+                        log.error(f"Error loading title embeddings from pickle: {e}")
+                        self.item_title_embeddings = {}
+                        self.title_embedding_dim = 0
+                else:
+                    log.warning(
+                        f"Title embeddings not found. Run scripts/preprocess_title_genre_embeddings.py first."
+                    )
+        else:
+            log.info("Skipping title embeddings loading (use_title_emb=False)")
 
     def train_dataloader(self):
         """Create training dataloader"""

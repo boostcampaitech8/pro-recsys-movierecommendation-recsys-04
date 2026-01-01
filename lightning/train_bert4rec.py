@@ -56,6 +56,11 @@ def main(cfg: DictConfig):
         num_workers=cfg.data.num_workers,
         use_full_data=cfg.data.use_full_data,
         sampling_strategy=cfg.data.sampling_strategy,
+        # Metadata loading flags
+        use_genre_emb=cfg.model.use_genre_emb,
+        use_director_emb=cfg.model.use_director_emb,
+        use_writer_emb=cfg.model.use_writer_emb,
+        use_title_emb=cfg.model.use_title_emb,
     )
 
     # Setup data to get num_items
