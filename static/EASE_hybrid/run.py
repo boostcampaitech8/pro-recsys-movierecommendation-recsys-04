@@ -39,7 +39,7 @@ def main():
     parser.add_argument(
         "--lambda_reg",
         type=float,
-        default=500.0,
+        default=794.63,
     )
     parser.add_argument(
         "--valid_ratio",
@@ -186,11 +186,11 @@ def main():
     # ===============================
     alpha = 35.0
     meta_weights = {
-        "genres": alpha,
-        "directors": alpha,
-        "writers": alpha,
-        "years": alpha,
-        "titles": alpha
+        "genres": 16.04,
+        "directors": 43.61,
+        "writers": 34.80,
+        "years": 7.94,
+        "titles": 12.37
     }
 
     model = EASE(
