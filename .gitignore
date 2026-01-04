@@ -61,3 +61,28 @@ dataset/
 # ===============================
 .env
 .env.*
+
+# ===============================
+# Jupyter / Python runtime
+# ===============================
+.ipynb_checkpoints/
+.ipython/
+kernel-*.json
+history.sqlite
+
+# ===============================
+# Data (절대 커밋 금지)
+# ===============================
+Seung/data/
+data/
+dataset/
+*.csv
+*.tsv
+*.parquet
+
+# ===============================
+# Submissions / outputs
+# ===============================
+submission.csv
+*/output/
+*/outputs/
