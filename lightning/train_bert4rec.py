@@ -207,7 +207,9 @@ def main(cfg: DictConfig):
                 verbose=True,
             )
             callbacks.append(early_stopping)
-            log.info("Early stopping enabled (monitoring train_loss for full data mode)")
+            log.info(
+                "Early stopping enabled (monitoring train_loss for full data mode)"
+            )
         else:
             # Standard mode: monitor validation metric
             early_stopping = EarlyStopping(
@@ -257,10 +259,13 @@ def main(cfg: DictConfig):
     )
 
     # Print final gate values if using gate fusion
-    if hasattr(model, '_final_gate_values'):
+    if hasattr(model, "_final_gate_values"):
         feature_names, avg_gates = model._final_gate_values
         gate_str = " | ".join(
-            [f"{name}: {avg_gates[i].item():.4f}" for i, name in enumerate(feature_names)]
+            [
+                f"{name}: {avg_gates[i].item():.4f}"
+                for i, name in enumerate(feature_names)
+            ]
         )
         log.info(f"Final Gate values: {gate_str}")
 

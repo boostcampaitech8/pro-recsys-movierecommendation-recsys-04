@@ -517,9 +517,12 @@ class BERT4Rec(L.LightningModule):
         # Compute loss
         loss = self.criterion(logits, labels)
 
+        # Get batch size
+        batch_size = log_seqs.size(0)
+
         # Logging
         self.log(
-            "train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
+            "train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=batch_size
         )
 
         return loss
@@ -527,6 +530,10 @@ class BERT4Rec(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         """
         Validation step for Lightning
+
+        Supports both single-item and multi-item validation:
+        - Single-item: target_items is [batch_size] tensor
+        - Multi-item: target_items is list of lists
 
         Args:
             batch: (sequences, labels, metadata, ground_truth_items) from DataLoader
@@ -560,28 +567,19 @@ class BERT4Rec(L.LightningModule):
         # Get top-k predictions
         _, top_items = torch.topk(scores, k=10, dim=1)  # [batch, 10]
 
-        # Compute metrics using GPU batch processing (10-50x faster than Python loop)
-        batch_size = target_items.size(0)
+        # Check if multi-item validation (list of lists) or single-item (tensor)
+        is_multiitem = isinstance(target_items, list)
 
-        # Reshape target for broadcasting: [batch, 1]
-        target_items_expanded = target_items.view(-1, 1)
-
-        # Check if target is in top-k: [batch, 10] -> [batch]
-        hits = (top_items == target_items_expanded).any(dim=1)
-        val_hit_10 = hits.sum().item()
-
-        # Calculate NDCG for hits only
-        # Find positions where predictions match targets
-        matches = top_items == target_items_expanded  # [batch, 10]
-        ranks = matches.float().argmax(dim=1)  # [batch] - position of match (0-9)
-
-        # Calculate NDCG only for hits
-        ndcg_values = torch.where(
-            hits,
-            1.0 / torch.log2(ranks.float() + 2),  # +2 because rank starts at 0
-            torch.zeros_like(ranks.float()),
-        )
-        val_ndcg_10 = ndcg_values.sum().item()
+        if is_multiitem:
+            # Multi-item validation
+            val_hit_10, val_ndcg_10, val_nrecall_10 = \
+                self._compute_multiitem_metrics(top_items, target_items)
+            batch_size = len(target_items)
+        else:
+            # Single-item validation (original)
+            val_hit_10, val_ndcg_10, val_nrecall_10 = \
+                self._compute_singleitem_metrics(top_items, target_items)
+            batch_size = target_items.size(0)
 
         # Logging
         self.log(
@@ -591,6 +589,7 @@ class BERT4Rec(L.LightningModule):
             on_epoch=True,
             prog_bar=True,
             logger=True,
+            batch_size=batch_size,
         )
         self.log(
             "val_ndcg@10",
@@ -599,6 +598,16 @@ class BERT4Rec(L.LightningModule):
             on_epoch=True,
             prog_bar=True,
             logger=True,
+            batch_size=batch_size,
+        )
+        self.log(
+            "val_nrecall@10",
+            val_nrecall_10 / batch_size,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            batch_size=batch_size,
         )
 
         # Log gate values if using gate fusion
@@ -627,6 +636,7 @@ class BERT4Rec(L.LightningModule):
                     on_epoch=True,
                     prog_bar=False,
                     logger=True,
+                    batch_size=batch_size,
                 )
 
             # Store final gate values (will be printed after training)
@@ -635,8 +645,100 @@ class BERT4Rec(L.LightningModule):
         return {
             "val_hit@10": val_hit_10,
             "val_ndcg@10": val_ndcg_10,
+            "val_nrecall@10": val_nrecall_10,
             "batch_size": batch_size,
         }
+
+    def _compute_singleitem_metrics(self, top_items, target_items):
+        """
+        Compute metrics for single-item validation (original)
+
+        Args:
+            top_items: [batch, 10] - Top-10 predictions
+            target_items: [batch] - Single target item per user
+
+        Returns:
+            val_hit_10: Total hits
+            val_ndcg_10: Total NDCG
+            val_nrecall_10: Total nRecall (= hit for single item)
+        """
+        batch_size = target_items.size(0)
+
+        # Reshape target for broadcasting: [batch, 1]
+        target_items_expanded = target_items.view(-1, 1)
+
+        # Check if target is in top-k: [batch, 10] -> [batch]
+        hits = (top_items == target_items_expanded).any(dim=1)
+        val_hit_10 = hits.sum().item()
+
+        # Calculate NDCG for hits only
+        # Find positions where predictions match targets
+        matches = top_items == target_items_expanded  # [batch, 10]
+        ranks = matches.float().argmax(dim=1)  # [batch] - position of match (0-9)
+
+        # Calculate NDCG only for hits
+        ndcg_values = torch.where(
+            hits,
+            1.0 / torch.log2(ranks.float() + 2),  # +2 because rank starts at 0
+            torch.zeros_like(ranks.float()),
+        )
+        val_ndcg_10 = ndcg_values.sum().item()
+
+        # For single-item: nRecall@10 = Hit@10
+        val_nrecall_10 = val_hit_10
+
+        return val_hit_10, val_ndcg_10, val_nrecall_10
+
+    def _compute_multiitem_metrics(self, top_items, target_items_list):
+        """
+        Compute metrics for multi-item validation
+
+        Args:
+            top_items: [batch, 10] - Top-10 predictions (tensor)
+            target_items_list: List of lists - Multiple target items per user
+
+        Returns:
+            total_hit: Total hits (binary: 1 if any target in top-10)
+            total_ndcg: Total NDCG score
+            total_nrecall: Total nRecall score
+        """
+        import math
+
+        batch_size = len(target_items_list)
+        top_items_cpu = top_items.cpu().tolist()  # Convert to list for easier processing
+
+        total_hit = 0
+        total_ndcg = 0
+        total_nrecall = 0
+
+        for i in range(batch_size):
+            targets = set(target_items_list[i])  # User's target items (set for fast lookup)
+            preds = top_items_cpu[i]  # Top-10 predictions (list)
+
+            # Hit@10: Binary (1 if any target in top-10)
+            hit = 1 if any(pred in targets for pred in preds) else 0
+            total_hit += hit
+
+            # nRecall@10
+            num_hits = len(set(preds) & targets)  # Intersection
+            num_targets = len(targets)
+            nrecall = num_hits / min(10, num_targets) if num_targets > 0 else 0.0
+            total_nrecall += nrecall
+
+            # NDCG@10
+            dcg = 0.0
+            for rank, item in enumerate(preds, start=1):
+                if item in targets:
+                    dcg += 1.0 / math.log2(rank + 1)
+
+            # IDCG (ideal DCG): all targets in first positions
+            num_ideal = min(len(targets), 10)
+            idcg = sum(1.0 / math.log2(i + 2) for i in range(num_ideal))
+
+            ndcg = dcg / idcg if idcg > 0 else 0.0
+            total_ndcg += ndcg
+
+        return total_hit, total_ndcg, total_nrecall
 
     def configure_optimizers(self):
         """Configure optimizer for Lightning"""
@@ -649,12 +751,14 @@ class BERT4Rec(L.LightningModule):
             weight_decay=self.weight_decay,
             betas=(0.9, 0.999),
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs,
-            eta_min=self.lr / 10.0,
-        )
-        return [optimizer], [scheduler]
+        # Removed scheduler to match Optuna tuning (constant LR)
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        #     optimizer,
+        #     T_max=self.trainer.max_epochs,
+        #     eta_min=self.lr / 10.0,
+        # )
+        # return [optimizer], [scheduler]
+        return optimizer
 
     def _prepare_batch_metadata(self, seqs, item_metadata):
         """

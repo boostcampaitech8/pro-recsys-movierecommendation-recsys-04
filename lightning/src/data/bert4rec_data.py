@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import lightning as L
 import torch
+import random
 from collections import defaultdict
 from torch.utils.data import Dataset, DataLoader
 
@@ -312,7 +313,9 @@ class BERT4RecValidationDataset(Dataset):
         """
         Args:
             user_sequences: Dict[user_id, List[item_id]] - User training sequences
-            user_targets: Dict[user_id, item_id] - Ground truth items to predict
+            user_targets: Dict[user_id, item_id or List[item_id]] - Ground truth items
+                          Single-item: int
+                          Multi-item: List[int]
             num_items: Number of unique items
             max_len: Maximum sequence length
             mask_token: Token ID for [MASK]
@@ -345,6 +348,11 @@ class BERT4RecValidationDataset(Dataset):
 
         self.users = list(user_sequences.keys())
 
+        # Check if multi-item validation
+        first_user = self.users[0]
+        first_target = user_targets[first_user]
+        self.is_multiitem = isinstance(first_target, list)
+
     def __len__(self):
         return len(self.users)
 
@@ -354,7 +362,9 @@ class BERT4RecValidationDataset(Dataset):
             tokens: [max_len] - Sequence with [MASK] at the end
             labels: [max_len] - Dummy labels (not used in validation)
             metadata: Dict with metadata tensors
-            target: int - Ground truth item
+            target: int or List[int] - Ground truth item(s)
+                    Single-item: torch.LongTensor([target])
+                    Multi-item: List[int]
         """
         user = self.users[idx]
         seq = self.user_sequences[user]
@@ -374,11 +384,19 @@ class BERT4RecValidationDataset(Dataset):
         # Prepare metadata only if enabled
         metadata = self._prepare_metadata(tokens) if self.has_metadata else {}
 
+        # Handle single-item vs multi-item
+        if self.is_multiitem:
+            # Multi-item: return list directly
+            target_output = target  # List[int]
+        else:
+            # Single-item: wrap in tensor
+            target_output = torch.LongTensor([target])
+
         return (
             torch.LongTensor(tokens),
             torch.LongTensor(labels),
             metadata,
-            torch.LongTensor([target]),
+            target_output,
         )
 
     def _prepare_metadata(self, tokens):
@@ -597,14 +615,27 @@ class BERT4RecDataModule(L.LightningDataModule):
             if self.use_full_data:
                 # train data = full data, valid data = dummy
                 self.user_train[user] = seq
-                self.user_valid[user] = seq[-1]  # Dummy
+                self.user_valid[user] = [seq[-1]]  # Dummy (list format)
             else:
                 # train, validation split
-                self.user_train[user] = seq[:-1]
-                self.user_valid[user] = seq[-1]  # Last item
+                # Option 1: Single-item validation (original, default)
+                # self.user_train[user] = seq[:-1]
+                # self.user_valid[user] = [seq[-1]]  # Last item only
+
+                # Option 2: Multi-item validation (1% like test set)
+                self.user_train[user], self.user_valid[user] = \
+                    self._create_multiitem_split(user, seq)
 
         log.info(f"Train sequences: {len(self.user_train)}")
         log.info(f"Valid sequences: {len(self.user_valid)}")
+
+        # Log validation statistics
+        if not self.use_full_data:
+            val_sizes = [len(v) for v in self.user_valid.values()]
+            log.info(f"Validation set statistics:")
+            log.info(f"  Min items per user: {min(val_sizes)}")
+            log.info(f"  Max items per user: {max(val_sizes)}")
+            log.info(f"  Avg items per user: {np.mean(val_sizes):.2f}")
 
         # Update num_users to filtered count
         self.num_users = len(self.user_train)
@@ -613,6 +644,50 @@ class BERT4RecDataModule(L.LightningDataModule):
         log.info("Setting up Item meta-data ...")
         self._load_item_metadata(df)
         log.info("Item meta-data setup complete")
+
+    def _create_multiitem_split(self, user, seq):
+        """
+        Create multi-item validation split (like test set)
+
+        Strategy:
+        1) Last interaction is always included in validation
+        2) Additional random selections from earlier interactions
+        3) Total validation items = 1% of user's interactions (minimum 1)
+
+        Args:
+            user: User ID
+            seq: User's full interaction sequence (list of item IDs)
+
+        Returns:
+            train_seq: List of items for training
+            val_items: List of items for validation
+        """
+        seq_len = len(seq)
+
+        # Calculate 1% (minimum 1 item)
+        num_val = max(1, int(seq_len * 0.01))
+
+        # Last item is always included
+        val_indices = {seq_len - 1}  # Use set for efficient lookup
+
+        # Add random selections if needed (num_val - 1 more items)
+        if num_val > 1:
+            # Available indices: all except last
+            available_indices = list(range(seq_len - 1))
+
+            # Random seed based on user ID for reproducibility
+            rng = random.Random(self.seed + user)
+
+            # Sample additional items
+            num_additional = min(num_val - 1, len(available_indices))
+            additional_indices = rng.sample(available_indices, num_additional)
+            val_indices.update(additional_indices)
+
+        # Split into train and validation
+        train_seq = [seq[i] for i in range(seq_len) if i not in val_indices]
+        val_items = sorted([seq[i] for i in val_indices])  # Sort for consistency
+
+        return train_seq, val_items
 
     def _load_item_metadata(self, df):
         """
@@ -972,10 +1047,26 @@ class BERT4RecDataModule(L.LightningDataModule):
         )
 
     def _collate_fn_val_with_metadata(self, batch):
-        """Custom collate function for validation with metadata"""
+        """
+        Custom collate function for validation with metadata
+
+        Supports both single-item and multi-item validation:
+        - Single-item: targets is tensor [batch_size]
+        - Multi-item: targets is list of lists
+        """
         tokens = torch.stack([item[0] for item in batch])
         labels = torch.stack([item[1] for item in batch])
-        targets = torch.cat([item[3] for item in batch])  # [batch_size]
+
+        # Check if multi-item validation (item[3] is list) or single-item (tensor)
+        first_target = batch[0][3]
+        is_multiitem = isinstance(first_target, list)
+
+        if is_multiitem:
+            # Multi-item: targets is list of lists
+            targets = [item[3] for item in batch]  # List of lists
+        else:
+            # Single-item: concatenate tensors
+            targets = torch.cat([item[3] for item in batch])  # [batch_size]
 
         # Stack metadata (skip if empty)
         metadata_batch = {}
@@ -1019,7 +1110,14 @@ class BERT4RecDataModule(L.LightningDataModule):
         full_sequences = {}
         for user_idx in self.user_train.keys():
             # train + validation 아이템 모두 포함
-            full_seq = self.user_train[user_idx] + [self.user_valid[user_idx]]
+            # user_valid[user_idx] can be single item or list
+            val_items = self.user_valid[user_idx]
+            if isinstance(val_items, list):
+                # Multi-item validation
+                full_seq = self.user_train[user_idx] + val_items
+            else:
+                # Single-item validation
+                full_seq = self.user_train[user_idx] + [val_items]
             full_sequences[user_idx] = full_seq
         return full_sequences
 
