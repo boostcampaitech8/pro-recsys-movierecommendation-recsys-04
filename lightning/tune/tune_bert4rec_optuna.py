@@ -12,18 +12,22 @@ Usage:
     python tune_bert4rec_optuna.py --study_name bert4rec_study --resume
 """
 
-import os
-import sys
-import logging
+from __future__ import annotations
+
 import argparse
+import datetime
+import logging
+import platform
+import sys
 from pathlib import Path
-import optuna
-from optuna.integration import PyTorchLightningPruningCallback
+from typing import Any
+
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
-from lightning.pytorch.loggers import TensorBoardLogger
+import optuna
 import torch
+from lightning.pytorch.callbacks import EarlyStopping
 from omegaconf import OmegaConf
+from optuna.integration import PyTorchLightningPruningCallback
 
 # Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -38,12 +42,12 @@ log = logging.getLogger(__name__)
 class OptunaObjective:
     """Optuna objective function for BERT4Rec hyperparameter tuning"""
 
-    def __init__(self, data_dir, n_epochs=50, use_pruning=True):
-        self.data_dir = data_dir
+    def __init__(self, data_dir: str | Path, n_epochs: int = 50, use_pruning: bool = True) -> None:
+        self.data_dir = Path(data_dir).expanduser()
         self.n_epochs = n_epochs
         self.use_pruning = use_pruning
 
-    def __call__(self, trial: optuna.Trial):
+    def __call__(self, trial: optuna.Trial) -> float:
         """
         Objective function called by Optuna for each trial
 
@@ -59,30 +63,50 @@ class OptunaObjective:
         # =================================================================
 
         # Model architecture
-        hidden_units = trial.suggest_categorical('hidden_units', [64, 128, 256])
-        num_heads = trial.suggest_categorical('num_heads', [2, 4, 8])
-        num_layers = trial.suggest_int('num_layers', 1, 3)
-        max_len = trial.suggest_categorical('max_len', [50, 100, 150, 200])
-        dropout_rate = trial.suggest_float('dropout_rate', 0.1, 0.5)
+        # hidden_units = trial.suggest_categorical("hidden_units", [128, 256])
+        # num_heads = trial.suggest_categorical("num_heads", [4, 8])
+        # num_layers = trial.suggest_int("num_layers", 2, 3)
+        # max_len = trial.suggest_categorical("max_len", [200])  # [100, 150, 200])
+        hidden_units = 256
+        num_heads = 8
+        num_layers = 3
+        max_len = 200
+        dropout_rate = trial.suggest_float("dropout_rate", 0.15, 0.3)  # 최소 0.15
 
         # Training hyperparameters
-        lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
-        weight_decay = trial.suggest_float('weight_decay', 0.0, 0.1)
-        batch_size = trial.suggest_categorical('batch_size', [128, 256, 512])
+        lr = trial.suggest_float("lr", 0.0001, 0.001, log=True)
+        weight_decay = trial.suggest_float("weight_decay", 0.01, 0.1)  # 최소 0.01
+
+        # batch_size = trial.suggest_categorical("batch_size", [128, 256, 512])
+        batch_size = 128
 
         # Masking strategy
-        random_mask_prob = trial.suggest_float('random_mask_prob', 0.1, 0.3)
-        last_item_mask_ratio = trial.suggest_float('last_item_mask_ratio', 0.0, 0.5)
+        random_mask_prob = trial.suggest_float(
+            "random_mask_prob", 0.15, 0.25
+        )  # 충분한 augmentation
+        last_item_mask_ratio = trial.suggest_float(
+            "last_item_mask_ratio", 0.01, 0.1
+        )  # 0.0, 0.2)
 
         # Seed (optional - not recommended for production)
-        # seed = trial.suggest_int('seed', 0, 10000)
+        # seed = trial.suggest_int("seed", 0, 10000)
+        seed = 42
+
+        # =================================================================
+        # 1-1. SET SEED FOR REPRODUCIBILITY
+        # =================================================================
+
+        # Fix all random seeds for reproducibility
+        import lightning as L
+
+        L.seed_everything(seed, workers=True)
 
         # =================================================================
         # 2. DATA MODULE
         # =================================================================
 
         datamodule = BERT4RecDataModule(
-            data_dir=self.data_dir,
+            data_dir=str(self.data_dir),
             data_file="train_ratings.csv",
             batch_size=batch_size,
             max_len=max_len,
@@ -92,6 +116,11 @@ class OptunaObjective:
             seed=42,
             num_workers=4,
             use_full_data=False,
+            # Disable metadata loading for faster tuning
+            use_genre_emb=False,
+            use_director_emb=False,
+            use_writer_emb=False,
+            use_title_emb=False,
         )
 
         # Setup data to get num_items
@@ -122,24 +151,19 @@ class OptunaObjective:
         callbacks = [
             # Early stopping (aggressive for faster tuning)
             EarlyStopping(
-                monitor='val_ndcg@10',
+                monitor="val_ndcg@10",
                 patience=5,  # Reduced for faster trials
-                mode='max',
+                mode="max",
                 verbose=False,
             ),
-            # Checkpoint best model
-            ModelCheckpoint(
-                monitor='val_ndcg@10',
-                mode='max',
-                save_top_k=1,
-                verbose=False,
-            ),
+            # Note: Checkpoint disabled for tuning to save disk space
+            # Only the best hyperparameters are saved, not model weights
         ]
 
         # Add pruning callback if enabled
         if self.use_pruning:
             callbacks.append(
-                PyTorchLightningPruningCallback(trial, monitor='val_ndcg@10')
+                PyTorchLightningPruningCallback(trial, monitor="val_ndcg@10")
             )
 
         # =================================================================
@@ -148,15 +172,15 @@ class OptunaObjective:
 
         trainer = L.Trainer(
             max_epochs=self.n_epochs,
-            accelerator='auto',
+            accelerator="auto",
             devices=1,  # Single device for tuning
-            precision='16-mixed',
+            precision="16-mixed",
             gradient_clip_val=5.0,
             callbacks=callbacks,
             logger=False,  # Disable logging for speed
             enable_progress_bar=False,  # Disable progress bar
             enable_model_summary=False,
-            enable_checkpointing=True,
+            enable_checkpointing=False,  # Disable checkpointing to save disk space
         )
 
         # =================================================================
@@ -166,12 +190,15 @@ class OptunaObjective:
         try:
             trainer.fit(model, datamodule=datamodule)
 
-            # Get best validation score
-            best_score = trainer.callback_metrics.get('val_ndcg@10', 0.0)
+            # Get validation metrics
+            metrics = trainer.callback_metrics
+            best_score = self._tensor_to_float(metrics.get("val_ndcg@10", 0.0))
+            val_nrecall = self._tensor_to_float(metrics.get("val_nrecall@10", 0.0))
+            val_hit = self._tensor_to_float(metrics.get("val_hit@10", 0.0))
 
-            # Report intermediate values for pruning
-            if isinstance(best_score, torch.Tensor):
-                best_score = best_score.item()
+            # Record metrics as trial user attributes
+            trial.set_user_attr("val_nrecall@10", val_nrecall)
+            trial.set_user_attr("val_hit@10", val_hit)
 
             return best_score
 
@@ -182,17 +209,22 @@ class OptunaObjective:
             log.error(f"Trial failed with error: {e}")
             return 0.0  # Return worst score on failure
 
+    @staticmethod
+    def _tensor_to_float(value: torch.Tensor | float) -> float:
+        """Convert tensor to float if needed"""
+        return value.item() if isinstance(value, torch.Tensor) else float(value)
+
 
 def tune_hyperparameters(
-    data_dir: str,
+    data_dir: str | Path,
     n_trials: int = 50,
     n_epochs: int = 50,
     study_name: str = "bert4rec_study",
-    storage: str = None,
+    storage: str | None = None,
     n_jobs: int = 1,
     use_pruning: bool = True,
     resume: bool = False,
-):
+) -> optuna.Study:
     """
     Run Optuna hyperparameter tuning for BERT4Rec
 
@@ -211,34 +243,87 @@ def tune_hyperparameters(
     # 1. CREATE/LOAD STUDY
     # =================================================================
 
+    # Convert data_dir to Path
+    data_dir = Path(data_dir).expanduser()
+
     if storage is None:
         # Use SQLite for persistent storage
-        storage = f"sqlite:///{study_name}.db"
+        # Remove .db extension from study_name if it exists to avoid .db.db
+        clean_study_name = study_name.replace(".db", "")
+        storage = f"sqlite:///{clean_study_name}.db"
 
     # Create or load study
+    # Define sampler and pruner (will be used for both new and resumed studies)
+    sampler = optuna.samplers.TPESampler(seed=42)
+    pruner = (
+        optuna.pruners.MedianPruner(
+            n_startup_trials=5,
+            n_warmup_steps=10,
+        )
+        if use_pruning
+        else optuna.pruners.NopPruner()
+    )
+
     if resume:
         log.info(f"Resuming study: {study_name}")
-        study = optuna.load_study(
-            study_name=study_name,
-            storage=storage,
-        )
+        try:
+            study = optuna.load_study(
+                study_name=study_name,
+                storage=storage,
+                sampler=sampler,
+                pruner=pruner,
+            )
+            log.info(f"Loaded existing study with {len(study.trials)} trials")
+
+            # Fix stuck RUNNING trials (from interrupted runs)
+            running_trials = [
+                t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING
+            ]
+            if running_trials:
+                log.warning(
+                    f"Found {len(running_trials)} stuck RUNNING trials from previous interrupted run"
+                )
+                log.warning("Please manually mark them as FAILED in the database or use optuna study optimize --resume")
+        except KeyError:
+            log.warning(f"Study '{study_name}' not found. Creating new study.")
+            resume = False
+            study = optuna.create_study(
+                study_name=study_name,
+                direction="maximize",
+                storage=storage,
+                load_if_exists=False,
+                sampler=sampler,
+                pruner=pruner,
+            )
     else:
         log.info(f"Creating new study: {study_name}")
         study = optuna.create_study(
             study_name=study_name,
-            direction='maximize',  # Maximize NDCG@10
+            direction="maximize",  # Maximize NDCG@10
             storage=storage,
             load_if_exists=False,
-            sampler=optuna.samplers.TPESampler(seed=42),
-            pruner=optuna.pruners.MedianPruner(
-                n_startup_trials=5,
-                n_warmup_steps=10,
-            ) if use_pruning else optuna.pruners.NopPruner(),
+            sampler=sampler,
+            pruner=pruner,
         )
 
     # =================================================================
     # 2. RUN OPTIMIZATION
     # =================================================================
+
+    # Set study-level metadata (only for new studies)
+    if not resume:
+        study.set_user_attr("created_at", datetime.datetime.now().isoformat())
+        study.set_user_attr("data_dir", str(data_dir))
+        study.set_user_attr("n_trials_target", n_trials)
+        study.set_user_attr("n_epochs", n_epochs)
+        study.set_user_attr("n_jobs", n_jobs)
+        study.set_user_attr("use_pruning", use_pruning)
+        study.set_user_attr("python_version", platform.python_version())
+        study.set_user_attr("pytorch_version", torch.__version__)
+        study.set_user_attr("cuda_available", torch.cuda.is_available())
+        if torch.cuda.is_available():
+            study.set_user_attr("cuda_version", torch.version.cuda)
+            study.set_user_attr("gpu_name", torch.cuda.get_device_name(0))
 
     objective = OptunaObjective(
         data_dir=data_dir,
@@ -246,14 +331,32 @@ def tune_hyperparameters(
         use_pruning=use_pruning,
     )
 
-    log.info(f"Starting optimization with {n_trials} trials...")
+    # Calculate remaining trials for resume mode
+    if resume:
+        completed_trials = len(
+            [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        )
+        pruned_trials = len(
+            [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+        )
+        total_finished = len(study.trials)
+
+        log.info(
+            f"Resume mode: {total_finished} trials already exist ({completed_trials} completed, {pruned_trials} pruned)"
+        )
+        log.info(f"Will run {n_trials} additional trials...")
+        trials_to_run = n_trials
+    else:
+        log.info(f"Starting optimization with {n_trials} trials...")
+        trials_to_run = n_trials
+
     log.info(f"Max epochs per trial: {n_epochs}")
     log.info(f"Parallel jobs: {n_jobs}")
     log.info(f"Pruning enabled: {use_pruning}")
 
     study.optimize(
         objective,
-        n_trials=n_trials,
+        n_trials=trials_to_run,
         n_jobs=n_jobs,
         show_progress_bar=True,
     )
@@ -262,9 +365,9 @@ def tune_hyperparameters(
     # 3. RESULTS
     # =================================================================
 
-    log.info("\n" + "="*70)
+    log.info("\n" + "=" * 70)
     log.info("OPTIMIZATION COMPLETE")
-    log.info("="*70)
+    log.info("=" * 70)
 
     # Best trial
     best_trial = study.best_trial
@@ -276,11 +379,13 @@ def tune_hyperparameters(
         log.info(f"  {key}: {value}")
 
     # Top 5 trials
-    log.info("\n" + "-"*70)
+    log.info("\n" + "-" * 70)
     log.info("Top 5 Trials:")
-    log.info("-"*70)
+    log.info("-" * 70)
 
-    top_trials = sorted(study.trials, key=lambda t: t.value if t.value else 0, reverse=True)[:5]
+    top_trials = sorted(
+        study.trials, key=lambda t: t.value if t.value else 0, reverse=True
+    )[:5]
     for i, trial in enumerate(top_trials, 1):
         log.info(f"\n{i}. Trial {trial.number}")
         log.info(f"   NDCG@10: {trial.value:.4f}")
@@ -290,28 +395,33 @@ def tune_hyperparameters(
     output_dir = Path("results")
     output_dir.mkdir(exist_ok=True)
 
-    best_config = {
-        'model': {
-            'hidden_units': best_trial.params['hidden_units'],
-            'num_heads': best_trial.params['num_heads'],
-            'num_layers': best_trial.params['num_layers'],
-            'max_len': best_trial.params['max_len'],
-            'dropout_rate': best_trial.params['dropout_rate'],
-            'random_mask_prob': best_trial.params['random_mask_prob'],
-            'last_item_mask_ratio': best_trial.params['last_item_mask_ratio'],
+    # Build config from trial params and fixed values
+    best_config: dict[str, Any] = {
+        "model": {
+            "hidden_units": best_trial.params.get("hidden_units", 256),
+            "num_heads": best_trial.params.get("num_heads", 8),
+            "num_layers": best_trial.params.get("num_layers", 3),
+            "max_len": best_trial.params.get("max_len", 200),
+            "dropout_rate": best_trial.params["dropout_rate"],
+            "random_mask_prob": best_trial.params["random_mask_prob"],
+            "last_item_mask_ratio": best_trial.params["last_item_mask_ratio"],
         },
-        'training': {
-            'lr': best_trial.params['lr'],
-            'weight_decay': best_trial.params['weight_decay'],
+        "training": {
+            "lr": best_trial.params["lr"],
+            "weight_decay": best_trial.params["weight_decay"],
         },
-        'data': {
-            'batch_size': best_trial.params['batch_size'],
+        "data": {
+            "batch_size": best_trial.params.get("batch_size", 128),
         },
-        'best_score': best_trial.value,
+        "metrics": {
+            "val_ndcg@10": best_trial.value,
+            "val_nrecall@10": best_trial.user_attrs.get("val_nrecall@10", 0.0),
+            "val_hit@10": best_trial.user_attrs.get("val_hit@10", 0.0),
+        },
     }
 
     config_path = output_dir / f"{study_name}_best_config.yaml"
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         OmegaConf.save(best_config, f)
 
     log.info(f"\n✅ Best config saved to: {config_path}")
@@ -340,35 +450,35 @@ def tune_hyperparameters(
     return study
 
 
-def main():
-    parser = argparse.ArgumentParser(description='BERT4Rec Optuna Tuning')
+def main() -> None:
+    """Main entry point for the tuning script"""
+    parser = argparse.ArgumentParser(description="BERT4Rec Optuna Tuning")
 
     # Data
-    parser.add_argument('--data_dir', type=str, default='~/data/train/',
-                        help='Path to data directory')
+    parser.add_argument(
+        "--data_dir", type=str, default="~/data/train/", help="Path to data directory"
+    )
 
     # Optuna settings
-    parser.add_argument('--n_trials', type=int, default=50,
-                        help='Number of optimization trials')
-    parser.add_argument('--n_epochs', type=int, default=50,
-                        help='Max epochs per trial')
-    parser.add_argument('--study_name', type=str, default='bert4rec_study',
-                        help='Name of the Optuna study')
-    parser.add_argument('--n_jobs', type=int, default=1,
-                        help='Number of parallel jobs')
-    parser.add_argument('--no_pruning', action='store_true',
-                        help='Disable pruning')
-    parser.add_argument('--resume', action='store_true',
-                        help='Resume existing study')
+    parser.add_argument(
+        "--n_trials", type=int, default=50, help="Number of optimization trials"
+    )
+    parser.add_argument("--n_epochs", type=int, default=50, help="Max epochs per trial")
+    parser.add_argument(
+        "--study_name",
+        type=str,
+        default="bert4rec_study",
+        help="Name of the Optuna study",
+    )
+    parser.add_argument("--n_jobs", type=int, default=1, help="Number of parallel jobs")
+    parser.add_argument("--no_pruning", action="store_true", help="Disable pruning")
+    parser.add_argument("--resume", action="store_true", help="Resume existing study")
 
     args = parser.parse_args()
 
-    # Expand path
-    data_dir = os.path.expanduser(args.data_dir)
-
     # Run tuning
-    study = tune_hyperparameters(
-        data_dir=data_dir,
+    tune_hyperparameters(
+        data_dir=args.data_dir,
         n_trials=args.n_trials,
         n_epochs=args.n_epochs,
         study_name=args.study_name,
@@ -380,5 +490,5 @@ def main():
     log.info("\n🎉 Tuning complete!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

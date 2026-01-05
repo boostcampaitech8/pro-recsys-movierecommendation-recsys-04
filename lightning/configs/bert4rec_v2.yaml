@@ -6,13 +6,13 @@ defaults:
   - _self_
 
 # 모델 이름 (Hydra 로그 디렉토리 구조)
-model_name: bert4rec
+model_name: bert4rec_tune
 
 # 데이터 설정
 data:
   data_dir: "~/data/train/"
   data_file: "train_ratings.csv"
-  batch_size: 128              # 증가 (원래: 128, V100 최적화: 512)
+  batch_size: 128              # smaller batch = regularization
   min_interactions: 3
   seed: 42
   num_workers: 4               # CPU 코어 최적화
@@ -26,12 +26,12 @@ data:
 # 모델 설정 - 논문 기준으로 증가
 model:
   hidden_units: 256            # 증가 (초기: 64, 논문: 256)
-  num_heads: 8                 # 유지
-  num_layers: 2                # 논문: 2 (초기: 3은 과적합 위험)
+  num_heads: 8                 # optuna best : 8
+  num_layers: 3                # 논문: 2 (optuna: 3)
   max_len: 200                 # 증가 (초기: 50, user당 평균 rating 건수 163)
-  dropout_rate: 0.2            # 감소 (초기: 0.3)
-  random_mask_prob: 0.2        # 랜덤 마스킹 확률 (초기: 0.15, 논문: 0.15-0.2)
-  last_item_mask_ratio: 0.15    # 마지막 아이템만 마스킹하는 샘플 비율 (논문 권장)
+  dropout_rate: 0.20           # 감소 (초기: 0.3)
+  random_mask_prob: 0.20       # 랜덤 마스킹 확률 (초기: 0.15, 논문: 0.15-0.2)
+  last_item_mask_ratio: 0.05   # 마지막 아이템만 마스킹하는 샘플 비율 (논문 권장)
   share_embeddings: true
 
   # Metadata settings
@@ -47,9 +47,9 @@ model:
 
 # 학습 설정
 training:
-  num_epochs: 300              # 증가
-  lr: 0.0007                    # Cosine scheduler 시작 lr (논문: 0.0001로 수렴)
-  weight_decay: 0.05           # L2 regularization (논문 권장값 0.01) 
+  num_epochs: 200              # 증가
+  lr: 0.001                    # optuna: 0.002605로 할 경우 public score 감소
+  weight_decay: 0.05           # L2 regularization (논문 권장값 0.01)
   accelerator: "auto"          # "cpu", "gpu", "tpu", or "auto"
   devices: "auto"              # Number of devices or "auto"
   log_every_n_steps: 50
