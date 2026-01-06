@@ -1,0 +1,10 @@
+# Python 3.10+ compatible
+# Langchain requires Python >=3.10
+
+# Streamlit for web interface
+streamlit>=1.30.0
+
+# Langchain - latest stable versions
+langchain>=1.0.0
+langchain-community>=0.4.1
+langchain-ollama>=1.0.1

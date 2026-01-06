@@ -27,4 +27,7 @@ dependencies = [
     "optuna>=4.6.0",
     "optuna-integration>=4.6.0",
     "optuna-dashboard>=0.20.0",
+    "langchain>=1.0.0",
+    "langchain-community>=0.4.1",
+    "langchain-ollama>=1.0.1",
 ]
