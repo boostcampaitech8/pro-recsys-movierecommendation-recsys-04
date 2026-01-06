@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from src.models.bert4rec import BERT4Rec
 from src.data.bert4rec_data import BERT4RecDataModule
+from src.models.content_recommender import TfidfContentRecommender
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +105,15 @@ def main(cfg: DictConfig):
     ease_grouped = ease_df.groupby("user")["item"].apply(list).to_dict()
 
     # =========================
+    # Load Content (TF-IDF)
+    # =========================
+    content_model = TfidfContentRecommender(
+        min_df=cfg.content.min_df,
+        max_df=cfg.content.max_df,
+    )
+    content_model.fit(cfg.content.metadata_path)
+
+    # =========================
     # User interaction count
     # =========================
     train_df = pd.read_csv(Path(cfg.data.data_dir).expanduser() / cfg.data.data_file)
@@ -133,8 +143,18 @@ def main(cfg: DictConfig):
             datamodule.idx2item[i] for i in bert_items if 1 <= i <= datamodule.num_items
         ]
 
-        # ----- EASE -----
+        # ----- Static Items : EASE and Content base recommend -----
         ease_items = ease_grouped.get(user_id, [])
+        content_items = content_model.recommend(
+            user_items=seq,
+            topk=cfg.ensemble.content_topk,
+            exclude=exclude,
+        )
+
+        static_candidates = []
+        for it in ease_items + content_items:
+            if it not in static_candidates:
+                static_candidates.append(it)
 
         # ----- Ratio -----
         count = user_item_count.get(user_id, 0)
@@ -142,7 +162,7 @@ def main(cfg: DictConfig):
 
         merged = []
 
-        for it in ease_items:
+        for it in static_candidates:
             if len(merged) >= static_k:
                 break
             if it not in exclude:

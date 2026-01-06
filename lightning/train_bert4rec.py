@@ -22,8 +22,10 @@ import torch
 from src.models.bert4rec import BERT4Rec
 from src.data.bert4rec_data import BERT4RecDataModule
 from src.utils import get_directories
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parent  # lightning/
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="bert4rec")
@@ -76,7 +78,21 @@ def main(cfg: DictConfig):
     )
 
     # Get checkpoint and TensorBoard directories
-    checkpoint_dir, tensorboard_dir = get_directories(cfg, stage='fit')
+    checkpoint_dir = (
+        PROJECT_ROOT
+        / "saved"
+        / "hydra_logs"
+        / cfg.model_name
+        / HydraConfig.get().runtime.output_dir.split("/")[-2]
+        / HydraConfig.get().runtime.output_dir.split("/")[-1]
+        / "checkpoints"
+    )
+
+    tensorboard_dir = PROJECT_ROOT / "saved" / "tensorboard_logs" / cfg.model_name
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    tensorboard_dir.mkdir(parents=True, exist_ok=True)
+
     log.info(f"Checkpoint directory: {checkpoint_dir}")
     log.info(f"TensorBoard directory: {tensorboard_dir}")
 

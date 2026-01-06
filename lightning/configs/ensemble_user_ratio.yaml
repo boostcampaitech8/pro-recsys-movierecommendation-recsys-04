@@ -18,7 +18,14 @@ ensemble:
   bert_model_name: "bert4rec"
   ease_model_name: "ease"
   bert_topk: 5     # BERT에서 최대 몇 개 뽑을지
+  content_topk: 20 # 20~50 사이로.. 10개보다 많으면 될듯
+
 
 inference:
   topk: 10
   batch_size: 256
+
+content:
+  metadata_path: ~/sojin/data/processed/item_content.csv
+  min_df: 3
+  max_df: 0.9
