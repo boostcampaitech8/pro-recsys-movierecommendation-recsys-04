@@ -3,7 +3,7 @@ import pandas as pd
 
 # 1. 데이터 로드
 # 모델 A (Static - MVAE)
-df_mvae = pd.read_csv("/data/ephemeral/home/jimin/pro-recsys-movierecommendation-recsys-04/mvae1.csv") 
+df_mvae = pd.read_csv("/data/ephemeral/home/jimin/pro-recsys-movierecommendation-recsys-04/src/models/SLIM/outputs/recommendations.csv") 
 # 모델 B (Static - EASE)
 df_ease = pd.read_csv("/data/ephemeral/home/jimin/pro-recsys-movierecommendation-recsys-04/ease.csv") 
 
@@ -33,7 +33,7 @@ for user in all_users:
         # 리스트의 인덱스(0부터 시작)가 곧 순위 정보임
         for rank, item in enumerate(user_items_mvae[user]):
             # 1 / (k + 등수) -> 등수는 1부터 시작하도록 rank+1
-            score = 0.86 / (k + rank + 1)
+            score = 0.8 / (k + rank + 1)
             if item in item_scores:
                 item_scores[item] += score
             else:
