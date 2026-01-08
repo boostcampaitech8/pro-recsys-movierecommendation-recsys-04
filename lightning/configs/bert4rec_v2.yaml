@@ -1,0 +1,81 @@
+# BERT4Rec Improved Configuration
+# 논문 기준 + 실험적 개선사항
+
+defaults:
+  - common/default_setup
+  - _self_
+
+# 모델 이름 (Hydra 로그 디렉토리 구조)
+model_name: bert4rec
+
+# 데이터 설정
+data:
+  data_dir: "~/data/train/"
+  data_file: "train_ratings.csv"
+  batch_size: 128              # 증가 (원래: 128, V100 최적화: 512)
+  min_interactions: 3
+  seed: 42
+  num_workers: 4               # CPU 코어 최적화
+  use_full_data: false          # true: 전체데이터사용/val_check사용안함/earlystop 사용안함, false: train/validation split
+
+  # Sequence Sampling Strategy (시퀀스 max_len 초과 시 샘플링 방법)
+  # - "recent": 최근 max_len개 아이템 선택 (BERT4Rec 기본값)
+  # - "weighted": 선형 가중치 샘플링 (1,2,3,...,seq_len 확률로 최신 아이템 선호, 순서 유지, 중복 없음)
+  sampling_strategy: "recent"
+
+# 모델 설정 - 논문 기준으로 증가
+model:
+  hidden_units: 256            # 증가 (초기: 64, 논문: 256)
+  num_heads: 8                 # 유지
+  num_layers: 2                # 논문: 2 (초기: 3은 과적합 위험)
+  max_len: 200                 # 증가 (초기: 50, user당 평균 rating 건수 163)
+  dropout_rate: 0.2            # 감소 (초기: 0.3)
+  random_mask_prob: 0.2        # 랜덤 마스킹 확률 (초기: 0.15, 논문: 0.15-0.2)
+  last_item_mask_ratio: 0.15    # 마지막 아이템만 마스킹하는 샘플 비율 (논문 권장)
+  share_embeddings: true
+
+  # Metadata settings
+  use_genre_emb: false      # Use genre embeddings (all fusion: 0.0239)
+  use_director_emb: false   # Use director embeddings(all fusion: 0.0278)
+  use_writer_emb: false     # Use writer embeddings(all fusion: 0.0916)
+  use_title_emb: false       # Use pre-computed title embeddings(all fusion: 0.3456)
+  metadata_fusion: "gate"   # Fusion strategy: "concat", "add", or "gate"
+  metadata_dropout: 0.1     # Dropout rate for metadata embeddings
+
+  # Metadata dimensions (automatically set by DataModule)
+  # num_genres, num_directors, num_writers, title_embedding_dim
+
+# 학습 설정
+training:
+  num_epochs: 300              # 증가
+  lr: 0.0007                    # Cosine scheduler 시작 lr (논문: 0.0001로 수렴)
+  weight_decay: 0.05           # L2 regularization (논문 권장값 0.01) 
+  accelerator: "auto"          # "cpu", "gpu", "tpu", or "auto"
+  devices: "auto"              # Number of devices or "auto"
+  log_every_n_steps: 50
+  val_check_interval: 1.0      # Validate every N epochs (1.0 = every epoch, 0.5 = twice per epoch)
+  gradient_clip_val: 5.0       # Gradient clipping (0.0 = disabled)
+  deterministic: false         # For reproducibility (slower)
+  precision: "16-mixed"        # V100 최적화: Tensor Core 활용 (1.5~2배 속도)
+
+  # Early stopping
+  early_stopping: true
+  early_stopping_patience: 10  
+  monitor_metric: "val_ndcg@10"
+
+# Checkpoint 설정
+checkpoint:
+  save_top_k: 1
+  monitor: "val_ndcg@10"
+  mode: "max"
+
+# 추론 설정
+inference:
+  # 최신 checkpoint 선택(default)
+  checkpoint_path: null
+  
+  # nRecall@10 점수 좋은 모델
+  # checkpoint_path: "~/juik/lightning/saved/hydra_logs/bert4rec/2025-12-22/16-34-25/checkpoints/bert4rec-epoch=188-val_ndcg@10=0.0983.ckpt"       # 0.1234
+  # checkpoint_path: "~/juik/lightning/saved/hydra_logs/bert4rec/2025-12-26/10-38-41/submissions/bert4rec_predictions_10_20251226112841_full.csv"  # 0.1325
+  topk: 10
+  batch_size: 512
