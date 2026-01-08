@@ -23,13 +23,15 @@ CONFIG = {
     'patience': 100,
     'k': 10, # Recall@10
     
-    'total_anneal_steps': 50000,
-    'anneal_cap': 0.2,
+    'total_anneal_steps': 20000,
+    'anneal_cap': 0.5,
     
-    'save_dir': './saved/models/ea-vae/',
+    'save_dir': './saved/models/ease/',
     'data_path': './data/train/train_ratings.csv',
     
     'seed': 87,
+    
+    'reg_lambda': 15,
     
     'model': 'EAVAE',
 }
@@ -85,7 +87,7 @@ def main():
         trainer.fit()
         
     elif CONFIG['model'] in ['EASE', 'EAVAE']:
-        model = Ease(reg_lambda=500)
+        model = Ease(reg_lambda=CONFIG['reg_lambda'])
         model.fit(train_mat)
         
         valid_dataset = StaticDataset(train_mat, valid_mat)

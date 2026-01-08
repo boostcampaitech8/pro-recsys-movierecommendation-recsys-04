@@ -21,11 +21,11 @@ class EAVAE(nn.Module):
         # 학습이 되지않는 텐서    
         self.register_buffer('ease_weight', ease_weight.clone().detach())
         self.ease_rate = ease_rate
-        self.ease_ln = nn.LayerNorm(self.q_dims[0], elementwise_affine=False)
-        self.gate_layer = nn.Sequential(
-            nn.Linear(q_dims[0], q_dims[0]),
-            nn.Sigmoid()
-        )
+        # self.ease_ln = nn.LayerNorm(self.q_dims[0], elementwise_affine=False)
+        # self.gate_layer = nn.Sequential(
+        #     nn.Linear(q_dims[0], q_dims[0]),
+        #     nn.Sigmoid()
+        # )
         
         # Encoder (q_z|x)
         # input -> hidden -> latent
@@ -118,12 +118,16 @@ class EAVAE(nn.Module):
         # Decoding
         vae_logits = self.decode(z)
         
+        # EASE 예측 결과 logit
         ease_base = x @ self.ease_weight
-        ease_norm = F.normalize(ease_base, p=2, dim=1)
         
-        # ease_scale_factor = 100.0  # 50~100 사이 값 추천
-        # ease_base_scaled = ease_base / ease_scale_factor
+        # 각 logit의 scailing 을 위한 normalize
+        ease_norm = F.normalize(ease_base, p=2, dim=1, eps=1e-8)
+        vae_norm = F.normalize(vae_logits, p=2, dim=1, eps=1e-8)
         
-        final_logits = self.output_alpha * ease_norm + self.output_beta * vae_logits
+        beta = F.softplus(self.output_beta)
+        
+        # Final logit을 산출할때 ease의 가중치를 5로 고정하고 vae_norm의 가중치를 beta로 학습하게 함
+        final_logits = 5 * ease_norm + beta * vae_norm
         
         return final_logits, mu, logvar

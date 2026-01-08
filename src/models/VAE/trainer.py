@@ -54,6 +54,8 @@ class Trainer:
             
             # log
             print(f"Epoch {epoch:03d} | Loss: {train_loss:.4f} | Recall@{self.k}: {recall_score:.4f} | Norm Recall@{self.k}: {normalized_recall_score:.4f}")
+            if self.model.output_alpha:
+                print(f"self.output_alpha : {self.model.output_alpha.item()}, self.output_beta : {self.model.output_beta.item()}")
             
             # Early stopping & save
             if recall_score > self.best_metric:
