@@ -36,7 +36,11 @@ class Ease:
         # 대각 성분에 lambda 추가
         # G += lambda * I
         diag_indices = torch.arange(G.shape[0], device=device)
-        G[diag_indices, diag_indices] += self.reg_lambda
+        
+        item_popularity = G[diag_indices, diag_indices] # G_ii
+        adaptive_lambda = self.reg_lambda * torch.pow(item_popularity, 0.5)
+        
+        G[diag_indices, diag_indices] += adaptive_lambda #self.reg_lambda
         
         # 역행렬 계산 (P = G^-1)
         P = torch.linalg.inv(G)
